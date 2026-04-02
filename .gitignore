@@ -1,0 +1,10 @@
+.venv/
+.pytest_cache/
+**/__pycache__/
+*.pyc
+agario_rl_experiment.egg-info/
+firebase-debug.log
+
+checkpoints/*.pt
+!checkpoints/latest.pt
+!checkpoints/checkpoint_00500.pt

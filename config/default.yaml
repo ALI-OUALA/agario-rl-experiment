@@ -1,0 +1,104 @@
+seed: 7
+num_agents: 3
+max_steps: 1200
+nearest_pellets: 8
+nearest_opponents: 6
+
+map:
+  start_size: 256
+  max_size: 1024
+  pellets_per_10k_area: 26
+  pellet_mass: 1.0
+  pellet_respawn_per_step: 4
+
+physics:
+  radius_scale: 3.6
+  base_speed: 3.5
+  speed_mass_factor: 0.28
+  drag: 0.82
+  eat_mass_ratio: 1.15
+  assimilation_efficiency: 0.94
+  split_cooldown_steps: 20
+  merge_cooldown_steps: 60
+  split_boost: 5.2
+  max_cells_per_agent: 4
+  min_split_mass: 16.0
+  enable_eject_mechanic: false
+  eject_mass_amount: 2.0
+  eject_cooldown_steps: 8
+
+rewards:
+  mass_gain_scale: 0.06
+  elimination_bonus: 10.0
+  death_penalty: -10.0
+  time_penalty: -0.02
+  survival_bonus: 0.001
+  survival_bonus_start_frac: 0.85
+
+rl:
+  gamma: 0.99
+  gae_lambda: 0.95
+  clip_coef: 0.2
+  learning_rate: 0.0003
+  entropy_coef: 0.01
+  value_coef: 0.5
+  ppo_epochs: 4
+  minibatch_size: 256
+  steps_per_update: 2048
+  imitation_coef: 0.2
+  max_grad_norm: 0.5
+  imitation_buffer_capacity: 12000
+  imitation_batch_size: 256
+
+curriculum:
+  enabled: true
+  stage_scale: 1.25
+  advance_window: 20
+  advance_survival_rate: 0.7
+  min_stage_steps: 200
+
+render:
+  enabled: true
+  window_width: 1920
+  window_height: 1080
+  side_panel_width: 620
+  start_fullscreen: false
+  window_resizable: true
+  fps: 60
+  show_help_by_default: true
+  theme: agar_reference_hybrid
+  overlay_mode_default: minimal
+  grid_enabled_default: true
+  grid_spacing: 40
+  grid_line_width: 2
+  hud_refresh_hz: 15
+  cache_grid_surface: true
+  show_agent_labels: false
+  show_score_chip: false
+
+simulation:
+  physics_hz: 90
+  decision_hz: 15
+  max_substeps_per_frame: 8
+  action_mode: continuous
+  camera_smoothness: 0.18
+  zoom_smoothness: 0.12
+
+async_training:
+  enabled: true
+  rollout_queue_size: 2
+  min_rollout_transitions_per_job: 1024
+  max_pending_weight_updates: 2
+
+supervisor:
+  min_speed_multiplier: 0.25
+  max_speed_multiplier: 16.0
+  speed_step: 0.25
+  checkpoint_path: checkpoints/latest.pt
+  auto_update_when_ready: true
+
+logging:
+  log_dir: logs
+  train_metrics_csv: logs/train_metrics.csv
+  print_every_updates: 1
+  checkpoint_every_updates: 10

@@ -1,0 +1,11 @@
+{
+  "checkpoint": "C:\\Users\\ali ouala eddine\\Desktop\\DEV\\Deep Learning\\RL\\Agario expirement\\checkpoints\\checkpoint_00500.pt",
+  "episodes": 20,
+  "wins": 0,
+  "win_rate": 0.0,
+  "mean_survival_steps": 448.0,
+  "mean_final_mass": 96.87899999999999,
+  "corner_time_fraction": 0.5946428571428571,
+  "threat_avoidance_rate": 0.20526315789473684,
+  "small_target_pressure_rate": 0.2
+}

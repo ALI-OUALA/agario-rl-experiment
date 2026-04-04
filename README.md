@@ -2,12 +2,17 @@
 
 This repository is a reinforcement learning lab built around a deterministic
 Agar.io-style world. You can train a shared PPO policy, observe it in the
-Raylib cockpit, evaluate checkpoints, and now play directly against the
-trained agents in a dedicated human mode.
+Raylib cockpit, evaluate checkpoints, train against stronger scripted and
+frozen opponents, and play directly against the trained agents in a dedicated
+human mode.
 
-As of April 2, 2026, the main checkpoint has been continued from update `366`
-to update `500`. The repository also includes a write-up of the experiment,
-local chart assets for publication, a blog draft, and a LinkedIn draft.
+As of April 4, 2026, the repo includes:
+
+- the original self-play checkpoint line continued from update `366` to
+  update `500`
+- a fresh `human_ready_v1` retrain from scratch against a mixed opponent pool
+- human-readiness proxy metrics that measure corner camping, threat response,
+  and pressure on smaller targets
 
 ## Project overview
 
@@ -21,6 +26,9 @@ shared-policy PPO setup that the earlier milestones used.
 - Async training support for the observer cockpit.
 - Raylib observer cockpit for live control, telemetry, and checkpointing.
 - Dedicated human-play mode with `1` player and `2` trained agents.
+- Mixed-opponent training against the frozen `500` checkpoint plus scripted
+  bots.
+- Human-readiness proxy metrics for threat response and anti-corner behavior.
 - Publication-ready Markdown files and local chart assets under `docs/`.
 
 ## Repository layout
@@ -42,8 +50,12 @@ matter most when you run or extend the experiment.
 - `scripts/supervise.py`: interactive observer cockpit entrypoint.
 - `scripts/play.py`: human-playable mode against the trained agents.
 - `scripts/eval.py`: deterministic checkpoint evaluation.
+- `scripts/train_human_ready.py`: fresh training against scripted and frozen
+  opponents.
+- `scripts/eval_human_readiness.py`: proxy evaluation for human-vs-agent
+  readiness.
 - `scripts/generate_report_assets.py`: chart generation for documentation.
-- `docs/`: experiment report, blog draft, LinkedIn draft, and reference docs.
+- `docs/`: experiment report, blog draft, and reference docs.
 
 ## Install
 
@@ -117,8 +129,11 @@ The current play controls are:
 
 - move the mouse to steer
 - press `Space` to split
-- press `E` to eject mass
 - press `Enter` to restart after death or at the end of a round
+
+The player no longer gets a human-only eject action in default play mode. That
+older setup gave the human a tactical option the RL agents had never been
+trained to answer, which made the comparison unfair.
 
 ### Evaluate the current checkpoint
 
@@ -128,6 +143,46 @@ policy.
 ```bash
 python scripts/eval.py --episodes 5 --deterministic
 ```
+
+### Train against stronger opponents
+
+Use the mixed-opponent training path when you want to train against something
+closer to what a human exposes.
+
+```bash
+python scripts/train_human_ready.py --updates 80
+```
+
+This run trains a fresh learner from scratch against:
+
+- the frozen `checkpoint_00500.pt` policy
+- a pellet-foraging scripted bot
+- a threat-aware evasive scripted bot
+- an opportunistic hunter scripted bot
+
+The latest mixed-opponent checkpoint is written to
+`checkpoints/human_ready_v1/latest.pt`.
+
+### Evaluate human-readiness
+
+Use the proxy evaluator when you want metrics that are more aligned with human
+matches than raw PPO loss.
+
+```bash
+python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20
+```
+
+The current proxy metrics are:
+
+- `win_rate`: mixed-opponent episode wins
+- `mean_survival_steps`: average lifetime before elimination or timeout
+- `mean_final_mass`: how much space and resource control the agent converts
+  into by episode end
+- `corner_time_fraction`: how often the agent hides in corners
+- `threat_avoidance_rate`: how often it increases distance from nearby larger
+  threats
+- `small_target_pressure_rate`: how often it closes distance on nearby smaller
+  targets
 
 ### Regenerate publication assets
 
@@ -140,13 +195,13 @@ python scripts/generate_report_assets.py --baseline-eval -2.211 --final-eval -6.
 
 ## Latest experiment snapshot
 
-The current repository includes two reportable milestones from the same
-checkpoint lineage.
+The current repository includes three reportable milestones.
 
 | Milestone | Source | Quick read |
 | --- | --- | --- |
 | Update `366` | `checkpoints/latest.pt` before continuation | High value loss, publishable baseline snapshot, deterministic 5-episode average return `-2.211` |
 | Update `500` | continued run on April 2, 2026 | Lower final losses, new numbered checkpoint, deterministic 5-episode average return `-6.284` |
+| `human_ready_v1` update `80` | fresh retrain against mixed opponents | Better pressure on smaller targets and slightly better threat response, but still no wins and too much corner camping |
 
 Read the full interpretation in [docs/experiment-results.md](docs/experiment-results.md).
 
@@ -157,11 +212,10 @@ The documentation is now split by job rather than by audience guesswork.
 - [docs/quickstart.md](docs/quickstart.md): shortest path to install, train,
   supervise, play, and evaluate.
 - [docs/experiment-results.md](docs/experiment-results.md): milestone-based
-  experiment report with the `100`, `300`, `366`, and `500` observations.
+  experiment report with the `100`, `300`, `366`, `500`, and
+  `human_ready_v1` observations.
 - [docs/blog-case-study.md](docs/blog-case-study.md): hybrid technical and
   build-story blog draft with local chart assets.
-- [docs/linkedin-post.md](docs/linkedin-post.md): short LinkedIn draft based on
-  the same milestones.
 - [docs/controls_and_tuning.md](docs/controls_and_tuning.md): observer cockpit
   controls and config tuning.
 - [docs/runtime_architecture.md](docs/runtime_architecture.md): snapshot-driven
@@ -184,9 +238,9 @@ their own milestone.
 
 If you want to keep pushing the experiment, these are the cleanest next moves.
 
-1. Spend time in `scripts/play.py` and `scripts/supervise.py` to verify whether
-   update `500` feels better than the quick deterministic evaluation suggests.
-2. Add richer evaluation metrics, such as per-agent win rate, survival time,
-   and average final mass, before making stronger claims publicly.
+1. Compare `checkpoints/latest.pt` and `checkpoints/human_ready_v1/latest.pt`
+   in both play mode and the new human-readiness evaluator.
+2. Increase opponent diversity or the number of mixed-opponent training updates
+   before claiming the agent is strong against humans.
 3. If you tune the reward or curriculum again, preserve the current
    observation/action contract so future blog updates stay comparable.

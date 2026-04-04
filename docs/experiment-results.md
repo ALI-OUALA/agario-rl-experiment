@@ -2,15 +2,17 @@
 
 This page captures the current public state of the Agar.io reinforcement
 learning experiment. It preserves the update `366` checkpoint as a reportable
-milestone, records the continued run to update `500`, and explains the gap in
-the CSV history honestly instead of inventing missing data.
+milestone, records the continued run to update `500`, documents the first
+mixed-opponent retrain, and explains the logging and evaluation gaps honestly
+instead of inventing missing data.
 
 ## Summary
 
-The experiment now has two comparable milestones from the same checkpoint
-lineage. Update `366` is the last checkpoint before the April 2, 2026
-continuation run. Update `500` is the result of resuming that exact state to a
-new target milestone with canonical logging enabled.
+The experiment now has three relevant checkpoints:
+
+- update `366`, the preserved pre-resume snapshot
+- update `500`, the continued self-play line
+- `human_ready_v1` update `80`, a fresh retrain against stronger opponents
 
 ![Training summary chart with the interactive logging gap highlighted](assets/training-summary.png)
 
@@ -124,7 +126,75 @@ Play mode keeps the trained-agent contract intact:
 - the RL agents still use the same observation schema
 - the RL agents still use the same continuous action interface
 - the RL agents still use the same reward shaping and shared policy weights
-- the optional mass-eject mechanic is only exposed to the human player
+- the player no longer gets a human-only eject action in default play mode
+
+That last point matters. The previous version of play mode gave the human an
+extra mass-eject action that the RL agents had never been trained to answer.
+That meant the human comparison was unfair before the bots even made a
+decision.
+
+## Human-readiness retrain
+
+The first retrain against stronger opponents was designed to attack the exact
+gap that showed up in play mode: the agents looked passable in self-play, but
+humans could still exploit them easily.
+
+### What changed
+
+The `human_ready_v1` run started from scratch and trained one learner agent at
+a time against a rotating pool of opponents:
+
+- the frozen `checkpoint_00500.pt` policy
+- a pellet-foraging scripted opponent
+- a threat-aware evasive scripted opponent
+- an opportunistic hunter scripted opponent
+
+This makes the learner see behaviors that mirror self-play alone was not
+producing consistently.
+
+### What the new metrics mean
+
+The new human-readiness evaluation uses proxy metrics that map to things a
+human actually notices in a match:
+
+- `win_rate`: whether the learner can actually finish mixed-opponent episodes
+  on top
+- `mean_survival_steps`: how long it stays alive
+- `mean_final_mass`: how much total control it ends with
+- `corner_time_fraction`: how often it hides in corners instead of contesting
+  space
+- `threat_avoidance_rate`: how often it increases distance from larger nearby
+  threats
+- `small_target_pressure_rate`: how often it closes distance on smaller nearby
+  targets
+
+These are not perfect human evaluations, but they are much closer to
+human-vs-agent failure modes than raw PPO loss alone.
+
+### Baseline vs retrain
+
+The current `500` checkpoint and the first mixed-opponent retrain look like
+this on the 20-episode human-readiness benchmark:
+
+| Checkpoint | Win rate | Mean survival | Mean final mass | Corner time | Threat avoidance | Small-target pressure |
+| --- | ---: | ---: | ---: | ---: | ---: | ---: |
+| Self-play update `500` | `0.00` | `448.0` | `96.879` | `0.595` | `0.205` | `0.200` |
+| `human_ready_v1` update `80` | `0.00` | `502.65` | `14.0` | `0.641` | `0.248` | `1.000` |
+
+On the older deterministic 5-episode self-play evaluation, the
+`human_ready_v1` checkpoint also came in worse than the self-play `500`
+checkpoint, with an average return of `-14.752`.
+
+This is an honest mixed result:
+
+- the retrain survives longer
+- it responds to nearby threats slightly better
+- it pressures smaller targets much more consistently
+- it still does not win the benchmark
+- it collapses into low final mass and too much corner time
+
+So the first retrain improved some human-relevant instincts, but it is not yet
+strong enough to call the human-vs-agent problem solved.
 
 ## Recommended next steps
 

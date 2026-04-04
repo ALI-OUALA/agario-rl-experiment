@@ -10,9 +10,9 @@ milestones, and why the final story is more interesting than a simple
 I built a deterministic Agar.io-style world with three agents that all share a
 single PPO policy. The environment includes pellets, split, merge, cell
 eating, and lightweight reward shaping around mass gain, eliminations,
-survival, and death. Around that core loop, I added a Raylib observer cockpit
-for training control and a new human-playable mode so I can test the agents
-directly instead of relying on charts alone.
+survival, and death. Around that core loop, I added a Raylib observer cockpit,
+a human-playable mode, and later a mixed-opponent training path so I could
+test the agents more like a person would.
 
 ## Why this experiment was worth documenting
 
@@ -106,12 +106,14 @@ A worse quick benchmark does not make the experiment a failure. It means the
 project is now at the point where better evaluation matters more than more
 confidence.
 
-The repo now has three things it did not have before:
+The repo now has four things it did not have before:
 
 1. A clean continuation path that resumes to a target update milestone.
 2. Canonical logging that stops the CSV from fragmenting into duplicate runs.
-3. A human-playable mode that lets me test whether the agents feel smart, not
-   just whether a loss number got smaller.
+3. A fairer human-play mode that no longer gives the player a human-only eject
+   action the bots were never trained to answer.
+4. A mixed-opponent training and evaluation path aimed directly at the
+   human-vs-agent gap.
 
 That is a better engineering state than before, even if the headline metric is
 messier than I would like.
@@ -124,8 +126,12 @@ The technical changes were straightforward but important.
   numbering intact.
 - `scripts/supervise.py` now writes interactive updates into the same canonical
   metrics CSV as headless training.
-- `scripts/play.py` adds a dedicated human-vs-bots mode with mouse steering,
-  split, and human-only mass eject.
+- `scripts/play.py` now uses a fairer human-vs-bots setup without the old
+  human-only eject shortcut.
+- `scripts/train_human_ready.py` trains a fresh learner against the frozen
+  `500` checkpoint plus scripted opponents.
+- `scripts/eval_human_readiness.py` reports proxy metrics for threat response,
+  target pressure, and corner camping.
 - `scripts/generate_report_assets.py` builds the local charts used in the
   docs.
 
@@ -133,15 +139,53 @@ The trained-agent contract did not change. I kept the same observation schema,
 action interface, reward shaping, and policy weights so the experiment story
 would stay comparable across milestones.
 
+## The first mixed-opponent retrain
+
+I took the next step I said the project needed: I trained a new run from
+scratch against a stronger opponent pool instead of trusting mirror self-play
+alone.
+
+The opponent pool included:
+
+- the frozen `checkpoint_00500.pt` policy
+- a pellet-foraging scripted bot
+- a threat-aware evasive scripted bot
+- an opportunistic hunter scripted bot
+
+The first retrain, `human_ready_v1`, ran for `80` updates. It produced a very
+mixed result on the new human-readiness benchmark:
+
+- self-play `500` win rate on the mixed benchmark: `0.00`
+- `human_ready_v1` win rate on the mixed benchmark: `0.00`
+- self-play `500` mean survival: `448.0`
+- `human_ready_v1` mean survival: `502.65`
+- self-play `500` corner time: `0.595`
+- `human_ready_v1` corner time: `0.641`
+- self-play `500` threat avoidance: `0.205`
+- `human_ready_v1` threat avoidance: `0.248`
+- self-play `500` small-target pressure: `0.200`
+- `human_ready_v1` small-target pressure: `1.000`
+- `human_ready_v1` deterministic 5-episode average return: `-14.752`
+
+That is not a victory lap. The retrain clearly became more eager to pressure
+smaller targets and it survived longer, but it still failed to convert that
+into wins and it still spent too much time in corners.
+
+That result is useful because it says the original diagnosis was right:
+humans expose a different problem than self-play exposed, and the first fix
+improves part of the behavior but not the whole stack.
+
 ## What I would do next
 
 The next technical move is not "train longer and hope." The next move is to
 improve evaluation.
 
-- Track win rate across larger episode sets.
-- Measure survival time and final mass, not only mean return.
-- Compare play-mode feel across milestones instead of only reading PPO losses.
-- Keep the same RL contract until I have a better benchmark story.
+- Increase the mixed-opponent training budget past `80` updates.
+- Add more opponent diversity so the learner does not overfit to one chase or
+  evasion pattern.
+- Keep measuring corner time, threat avoidance, and target pressure instead of
+  going back to PPO loss alone.
+- Keep the same RL contract until I have a stronger benchmark story.
 
 ![Evaluation comparison between the preserved update 366 checkpoint and the new update 500 checkpoint](assets/eval-comparison.png)
 
@@ -149,8 +193,8 @@ improve evaluation.
 
 This experiment is now in a good state for sharing because it tells a real
 story. The agents progressed from awkward local behavior to something more
-recognizable, the tooling got better, and the final numbers forced a more
-honest conclusion than a victory lap.
+recognizable, the tooling got better, and the first human-focused retrain
+showed both real progress and real remaining weaknesses.
 
 That is the kind of RL project I actually like reading about: one where the
 behavior, the code, and the uncertainty are all visible.

@@ -35,7 +35,7 @@ class HumanVsBotsSession:
         checkpoint_path: str | Path,
         player_index: int = 0,
         seed: int | None = None,
-        enable_eject: bool = True,
+        enable_eject: bool = False,
     ) -> None:
         if config.simulation.action_mode != "continuous":
             raise ValueError("Human play mode requires continuous action mode.")
@@ -80,7 +80,7 @@ class HumanVsBotsSession:
         player_command = build_player_command(control)
         actions[self.player_agent_id] = player_command.action
 
-        if player_command.eject_requested:
+        if self.config.physics.enable_eject_mechanic and player_command.eject_requested:
             self.env.world.eject_mass(self.player_agent_id, player_command.action[:2])
 
         observations, rewards, dones, infos = self.env.step(actions)

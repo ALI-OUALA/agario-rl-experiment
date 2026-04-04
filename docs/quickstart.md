@@ -1,8 +1,9 @@
 # Quickstart
 
 This page gets you from a fresh checkout to a running experiment as quickly as
-possible. It covers install, fresh training, resumed training, supervision,
-play mode, and evaluation, then points you to the deeper docs.
+possible. It covers install, fresh training, resumed training, mixed-opponent
+training, supervision, play mode, and evaluation, then points you to the
+deeper docs.
 
 ## Install the project
 
@@ -70,8 +71,11 @@ Play mode uses these controls:
 
 - move the mouse to steer
 - press `Space` to split
-- press `E` to eject mass
 - press `Enter` to restart after death or at the end of a round
+
+The player no longer gets a human-only eject action in default play mode. That
+older setup was unfair because the bots had never been trained to answer that
+extra option.
 
 ### Evaluate a checkpoint
 
@@ -79,6 +83,24 @@ Run a short deterministic evaluation against the latest checkpoint.
 
 ```bash
 python scripts/eval.py --episodes 5 --deterministic
+```
+
+### Train against the mixed opponent pool
+
+Run the human-readiness training loop when you want a fresh learner to face
+something stronger than mirror self-play.
+
+```bash
+python scripts/train_human_ready.py --updates 80
+```
+
+### Evaluate human-readiness proxies
+
+Run the proxy evaluator when you want metrics that reflect the kinds of
+mistakes a human punishes, such as corner camping and bad threat response.
+
+```bash
+python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20
 ```
 
 ### Benchmark step or render cost

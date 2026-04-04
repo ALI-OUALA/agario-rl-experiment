@@ -1,10 +1,16 @@
 .venv/
 .pytest_cache/
+.pytest_tmp/
+.pytest_run_*/
 **/__pycache__/
 *.pyc
 agario_rl_experiment.egg-info/
 firebase-debug.log
 
+checkpoints/**/*.pt
 checkpoints/*.pt
 !checkpoints/latest.pt
 !checkpoints/checkpoint_00500.pt
+!checkpoints/human_ready_v1/latest.pt
+!checkpoints/human_ready_v1/checkpoint_00080.pt
+docs/linkedin-post.md

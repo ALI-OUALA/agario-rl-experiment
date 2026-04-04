@@ -52,22 +52,27 @@ class SharedPPOTrainer:
             "update_count": 0.0,
         }
 
+    def set_tracked_agent_ids(self, agent_ids: list[str]) -> None:
+        """Restrict experience collection to a subset of environment agents."""
+        self.agent_ids = list(agent_ids)
+        self.trajectories = {agent_id: [] for agent_id in self.agent_ids}
+        self.episode_returns = {agent_id: 0.0 for agent_id in self.agent_ids}
+        self.episode_demos = {agent_id: [] for agent_id in self.agent_ids}
+
     def _ensure_env_state(self, env: Any) -> None:
         if not self.agent_ids:
-            self.agent_ids = list(env.agent_ids)
-            self.trajectories = {agent_id: [] for agent_id in self.agent_ids}
-            self.episode_returns = {agent_id: 0.0 for agent_id in self.agent_ids}
-            self.episode_demos = {agent_id: [] for agent_id in self.agent_ids}
+            self.set_tracked_agent_ids(list(env.agent_ids))
         if self.current_obs is None:
             self.current_obs = env.reset(seed=self.config.seed)
 
     def force_sync_with_env(self, env: Any, seed: int | None = None) -> dict[str, np.ndarray]:
         """Hard reset trainer episode state to match the environment reset."""
         if not self.agent_ids:
-            self.agent_ids = list(env.agent_ids)
-        self.trajectories = {agent_id: [] for agent_id in self.agent_ids}
-        self.episode_returns = {agent_id: 0.0 for agent_id in self.agent_ids}
-        self.episode_demos = {agent_id: [] for agent_id in self.agent_ids}
+            self.set_tracked_agent_ids(list(env.agent_ids))
+        else:
+            self.trajectories = {agent_id: [] for agent_id in self.agent_ids}
+            self.episode_returns = {agent_id: 0.0 for agent_id in self.agent_ids}
+            self.episode_demos = {agent_id: [] for agent_id in self.agent_ids}
         self.current_obs = env.reset(seed=seed)
         self.last_actions = None
         return self.current_obs
@@ -109,9 +114,11 @@ class SharedPPOTrainer:
         self,
         obs_dict: dict[str, np.ndarray],
         deterministic: bool = False,
+        agent_ids: list[str] | None = None,
     ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float | np.ndarray]]]:
+        ordered_agent_ids = list(agent_ids or self.agent_ids or sorted(obs_dict.keys()))
         obs_batch = torch.tensor(
-            np.stack([obs_dict[agent_id] for agent_id in self.agent_ids], axis=0),
+            np.stack([obs_dict[agent_id] for agent_id in ordered_agent_ids], axis=0),
             dtype=torch.float32,
             device=self.device,
         )
@@ -144,7 +151,7 @@ class SharedPPOTrainer:
 
         actions: dict[str, np.ndarray] = {}
         cache: dict[str, dict[str, float | np.ndarray]] = {}
-        for idx, agent_id in enumerate(self.agent_ids):
+        for idx, agent_id in enumerate(ordered_agent_ids):
             if self.action_mode == "continuous":
                 action_vec = np.array(
                     [
@@ -174,11 +181,15 @@ class SharedPPOTrainer:
         self,
         obs_dict: dict[str, np.ndarray],
         deterministic: bool = False,
+        agent_ids: list[str] | None = None,
     ) -> dict[str, np.ndarray]:
         """Get policy actions without writing to replay buffers."""
-        if not self.agent_ids:
-            self.agent_ids = sorted(obs_dict.keys())
-        actions, _ = self._policy_step(obs_dict, deterministic=deterministic)
+        ordered_agent_ids = list(agent_ids or self.agent_ids or sorted(obs_dict.keys()))
+        actions, _ = self._policy_step(
+            obs_dict,
+            deterministic=deterministic,
+            agent_ids=ordered_agent_ids,
+        )
         return actions
 
     def _record_decision_transition(
@@ -217,15 +228,29 @@ class SharedPPOTrainer:
         dt: float | None = None,
         track_experience: bool = True,
         deterministic: bool = False,
+        action_overrides: dict[str, np.ndarray] | None = None,
+        policy_agent_ids: list[str] | None = None,
     ) -> dict[str, dict[str, Any]]:
         """Run one policy decision followed by one or more physics substeps."""
         self._ensure_env_state(env)
         assert self.current_obs is not None
 
-        actions, cache = self._policy_step(self.current_obs, deterministic=deterministic)
+        tracked_agent_ids = list(self.agent_ids)
+        acting_policy_ids = list(policy_agent_ids or tracked_agent_ids)
+        actions, cache = self._policy_step(
+            self.current_obs,
+            deterministic=deterministic,
+            agent_ids=acting_policy_ids,
+        )
+        if action_overrides:
+            for agent_id, action in action_overrides.items():
+                actions[agent_id] = np.asarray(action, dtype=np.float32).copy()
         self.last_actions = {agent_id: action.copy() for agent_id, action in actions.items()}
-        decision_obs = {agent_id: obs.copy() for agent_id, obs in self.current_obs.items()}
-        accumulated_rewards = {agent_id: 0.0 for agent_id in self.agent_ids}
+        decision_obs = {
+            agent_id: self.current_obs[agent_id].copy()
+            for agent_id in tracked_agent_ids
+        }
+        accumulated_rewards = {agent_id: 0.0 for agent_id in tracked_agent_ids}
         infos: dict[str, dict[str, Any]] = {}
         dones: dict[str, bool] = {"__all__": False}
         next_obs: dict[str, np.ndarray] | None = self.current_obs
@@ -241,7 +266,7 @@ class SharedPPOTrainer:
             )
             if step_obs is not None:
                 next_obs = step_obs
-            for agent_id in self.agent_ids:
+            for agent_id in tracked_agent_ids:
                 accumulated_rewards[agent_id] += float(rewards.get(agent_id, 0.0))
             if dones.get("__all__", False):
                 break

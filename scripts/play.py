@@ -132,7 +132,7 @@ def _draw_hud(pr, session: HumanVsBotsSession, width: int, height: int, winner: 
     pr.draw_text("Human mode", 42, 32, 28, _color(pr, (35, 49, 58)))
     pr.draw_text(f"Mass: {player_mass:.1f}", 42, 70, 22, _color(pr, (55, 71, 82)))
     pr.draw_text(f"Cells: {player_cells}", 42, 98, 22, _color(pr, (55, 71, 82)))
-    pr.draw_text("Mouse aim | Space split | E eject | Enter restart", 42, 126, 18, _color(pr, (98, 115, 126)))
+    pr.draw_text("Mouse aim | Space split | Enter restart", 42, 126, 18, _color(pr, (98, 115, 126)))
 
     status_text = None
     if winner is not None:
@@ -168,7 +168,7 @@ def main() -> None:
         checkpoint_path=checkpoint_path,
         player_index=args.player_index,
         seed=seed,
-        enable_eject=True,
+        enable_eject=False,
     )
 
     try:
@@ -216,7 +216,7 @@ def main() -> None:
             player_position=(float(target_center[0]), float(target_center[1])),
             target_world=mouse_world,
             split_pressed=pr.is_key_pressed(pr.KEY_SPACE),
-            eject_pressed=pr.is_key_pressed(pr.KEY_E),
+            eject_pressed=False,
             alive=session.player_alive(),
         )
         round_over = bool(last_result and last_result.dones.get("__all__", False))

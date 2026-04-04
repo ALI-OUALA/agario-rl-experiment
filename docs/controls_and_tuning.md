@@ -155,6 +155,18 @@ Use `render.*` when you want to change the public runtime presentation.
 - `grid_enabled_default`: grid state at startup
 - `fps`: target render FPS
 
+## Human-play fairness
+
+The default human-play mode no longer gives the player a human-only eject
+action. That earlier version was misleading because the player had a tactical
+option the RL agents had never been trained to recognize or punish.
+
+The fairest default comparison is now:
+
+- same continuous movement interface for both sides
+- same split mechanic for both sides
+- no player-only eject shortcut
+
 ## Next steps
 
 Use these follow-up pages when you need more depth:

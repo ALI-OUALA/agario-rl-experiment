@@ -70,3 +70,18 @@ def test_human_vs_bots_session_steps_without_breaking_policy_path(tmp_path) -> N
     assert result.actions[session.player_agent_id].shape == (3,)
     assert session.player_agent_id in result.infos
     session.close()
+
+
+def test_human_vs_bots_session_disables_human_only_eject_by_default(tmp_path) -> None:
+    config = AgarioConfig()
+    config.simulation.action_mode = "continuous"
+    checkpoint_path = tmp_path / "latest.pt"
+
+    env = AgarioMultiAgentEnv(config=config, enable_render=False)
+    trainer = SharedPPOTrainer(config=config, observation_dim=env.observation_space["shape"][0], device="cpu")
+    trainer.save(checkpoint_path)
+    env.close()
+
+    session = HumanVsBotsSession(config=config, checkpoint_path=checkpoint_path, player_index=0)
+    assert session.config.physics.enable_eject_mechanic is False
+    session.close()

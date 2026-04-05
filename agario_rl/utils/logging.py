@@ -34,6 +34,9 @@ TRAIN_METRICS_FIELDS: tuple[str, ...] = (
     "total_loss",
     "batch_size",
     "update_count",
+    "rollout_seconds",
+    "update_seconds",
+    "transitions_per_second",
 )
 
 
@@ -51,6 +54,9 @@ def build_training_metrics_row(
         "total_loss": float(metrics.get("total_loss", 0.0)),
         "batch_size": float(metrics.get("batch_size", 0.0)),
         "update_count": float(metrics.get("update_count", float(update))),
+        "rollout_seconds": float(metrics.get("rollout_seconds", 0.0)),
+        "update_seconds": float(metrics.get("update_seconds", 0.0)),
+        "transitions_per_second": float(metrics.get("transitions_per_second", 0.0)),
     }
 
 
@@ -65,6 +71,7 @@ class TrainingMetricsLogger:
         self.file_path = Path(file_path)
         self.file_path.parent.mkdir(parents=True, exist_ok=True)
         self._rows_by_update: dict[int, dict[str, str]] = {}
+        self._max_update = 0
         self._load_existing()
 
     def _load_existing(self) -> None:
@@ -90,6 +97,7 @@ class TrainingMetricsLogger:
                 if not normalized.get("update_count"):
                     normalized["update_count"] = str(float(update))
                 self._rows_by_update[update] = normalized
+                self._max_update = max(self._max_update, update)
 
         self._write_all()
 
@@ -109,11 +117,20 @@ class TrainingMetricsLogger:
             for field in TRAIN_METRICS_FIELDS
         }
         update = int(float(row_dict["update"]))
-        self._rows_by_update[update] = {
+        serialized_row = {
             field: str(row_dict[field])
             for field in TRAIN_METRICS_FIELDS
         }
-        self._rows_by_update[update]["update"] = str(update)
+        serialized_row["update"] = str(update)
+        self._rows_by_update[update] = serialized_row
+        if update > self._max_update:
+            self._max_update = update
+            with self.file_path.open("a", newline="", encoding="utf-8") as handle:
+                writer = csv.DictWriter(handle, fieldnames=list(TRAIN_METRICS_FIELDS))
+                if handle.tell() == 0:
+                    writer.writeheader()
+                writer.writerow(serialized_row)
+            return
         self._write_all()
 
 

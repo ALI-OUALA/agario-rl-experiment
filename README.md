@@ -56,6 +56,7 @@ matter most when you run or extend the experiment.
   readiness.
 - `scripts/generate_report_assets.py`: chart generation for documentation.
 - `docs/`: experiment report, blog draft, and reference docs.
+- `agario_rl/utils/device.py`: torch device detection with Intel XPU support.
 
 ## Install
 
@@ -71,6 +72,17 @@ pip install -e .[dev]
 The interactive runtime and play mode depend on the `raylib` Python package,
 which is imported through `pyray`.
 
+If you want to test Intel Arc acceleration, install the XPU wheels in the
+project venv and verify detection:
+
+```bash
+.venv\Scripts\python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+.venv\Scripts\python -c "import torch; print(torch.xpu.is_available())"
+```
+
+The trainer now supports `--device xpu`, but this repo is still heavily
+rollout-bound, so GPU is not automatically faster.
+
 ## Run the main workflows
 
 The project now supports five common flows: fresh training, resumed training,
@@ -81,7 +93,7 @@ supervision, play mode, and evaluation.
 Use a fresh run when you want a new training series that starts at update `1`.
 
 ```bash
-python scripts/train.py --updates 20
+python scripts/train.py --updates 20 --device auto
 ```
 
 This command writes:
@@ -96,7 +108,7 @@ Use resume mode when you want to continue a saved checkpoint without resetting
 the update counter.
 
 ```bash
-python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt
+python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt --device auto
 ```
 
 If the checkpoint already stores `update_count=366`, this command runs updates
@@ -150,7 +162,7 @@ Use the mixed-opponent training path when you want to train against something
 closer to what a human exposes.
 
 ```bash
-python scripts/train_human_ready.py --updates 80
+python scripts/train_human_ready.py --updates 80 --device auto
 ```
 
 This run trains a fresh learner from scratch against:
@@ -184,6 +196,19 @@ The current proxy metrics are:
 - `small_target_pressure_rate`: how often it closes distance on nearby smaller
   targets
 
+### Benchmark rollout time versus PPO update time
+
+Use the training benchmark before assuming GPU will help.
+
+```bash
+python scripts/benchmark_perf.py --mode train --updates 2 --device cpu
+python scripts/benchmark_perf.py --mode train --updates 2 --device xpu
+```
+
+On this project, the most important question is not "is XPU available?" It is
+"is rollout collection or PPO update time dominant?" The benchmark prints both
+numbers separately.
+
 ### Regenerate publication assets
 
 Use the asset generator when you want to rebuild the local charts used by the
@@ -202,6 +227,7 @@ The current repository includes three reportable milestones.
 | Update `366` | `checkpoints/latest.pt` before continuation | High value loss, publishable baseline snapshot, deterministic 5-episode average return `-2.211` |
 | Update `500` | continued run on April 2, 2026 | Lower final losses, new numbered checkpoint, deterministic 5-episode average return `-6.284` |
 | `human_ready_v1` update `80` | fresh retrain against mixed opponents | Better pressure on smaller targets and slightly better threat response, but still no wins and too much corner camping |
+| Intel Arc speed pass | `.venv` with `torch 2.11.0+xpu` | Arc support works on this laptop, but the current workload is still CPU-faster overall |
 
 Read the full interpretation in [docs/experiment-results.md](docs/experiment-results.md).
 

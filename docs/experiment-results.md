@@ -196,6 +196,38 @@ This is an honest mixed result:
 So the first retrain improved some human-relevant instincts, but it is not yet
 strong enough to call the human-vs-agent problem solved.
 
+## Speed and hardware findings
+
+The repo now supports explicit torch device selection, including Intel XPU.
+That means the trainer can target:
+
+- `cpu`
+- `cuda` when available
+- `xpu` on supported Intel Arc hardware
+
+On the author machine used for this pass, the Intel Arc A370M was detected
+successfully with `torch 2.11.0+xpu`. However, the benchmark result was still
+CPU-faster for this workload:
+
+| Device setup | Rollout mean | PPO update mean |
+| --- | ---: | ---: |
+| CPU train + CPU inference | `4.15s` | `1.03s` |
+| XPU train + CPU inference | `5.09s` | `7.54s` |
+
+This matters because the project is not purely matrix-multiply bound. A large
+share of the total wall time still comes from environment stepping, rollout
+collection, Python control flow, and frequent small-batch inference. In other
+words, Intel Arc support works here, but it is not yet a net speed win for
+this specific repo.
+
+The current speed work still improved the engineering state:
+
+- the trainer now supports explicit `--device` and `--inference-device`
+  choices
+- training logs now record rollout time and PPO update time separately
+- the benchmark script now exposes a `train` mode so you can test CPU vs XPU
+  directly before committing to a long run
+
 ## Recommended next steps
 
 The experiment is in a good public state, but the next research step is clear.

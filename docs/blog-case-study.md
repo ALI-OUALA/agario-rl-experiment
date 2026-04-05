@@ -132,6 +132,8 @@ The technical changes were straightforward but important.
   `500` checkpoint plus scripted opponents.
 - `scripts/eval_human_readiness.py` reports proxy metrics for threat response,
   target pressure, and corner camping.
+- the trainer now supports explicit `cpu`, `cuda`, and `xpu` selection, plus
+  a separate inference device
 - `scripts/generate_report_assets.py` builds the local charts used in the
   docs.
 
@@ -175,6 +177,29 @@ That result is useful because it says the original diagnosis was right:
 humans expose a different problem than self-play exposed, and the first fix
 improves part of the behavior but not the whole stack.
 
+## The speed pass
+
+Because the first mixed-opponent retrain took so long, I also tested the next
+obvious idea: move the project onto my Intel Arc A370M.
+
+I installed the official XPU wheels and verified that PyTorch could see the
+GPU. Then I changed the trainer so it could:
+
+- select `cpu`, `cuda`, or `xpu`
+- keep rollout inference on a separate device from PPO updates
+- log rollout time and PPO update time separately
+- benchmark the train loop directly
+
+That last point mattered a lot. The benchmark showed that Intel Arc support
+worked, but the repo was still faster on CPU overall:
+
+- CPU train + CPU inference: rollout `4.15s`, PPO update `1.03s`
+- XPU train + CPU inference: rollout `5.09s`, PPO update `7.54s`
+
+So the correct story is not "GPU fixed training." The correct story is
+"hardware support works, but this workload is still dominated by rollout and
+small-step control overhead." That is a much more useful conclusion.
+
 ## What I would do next
 
 The next technical move is not "train longer and hope." The next move is to
@@ -185,6 +210,8 @@ improve evaluation.
   evasion pattern.
 - Keep measuring corner time, threat avoidance, and target pressure instead of
   going back to PPO loss alone.
+- Revisit vectorized rollouts or multi-environment collection before expecting
+  Intel Arc to become a large speed win.
 - Keep the same RL contract until I have a stronger benchmark story.
 
 ![Evaluation comparison between the preserved update 366 checkpoint and the new update 500 checkpoint](assets/eval-comparison.png)

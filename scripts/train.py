@@ -5,6 +5,7 @@ from __future__ import annotations
 import argparse
 from pathlib import Path
 import sys
+import time
 
 PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
@@ -14,6 +15,7 @@ from agario_rl import load_config
 from agario_rl.env.gym_env import AgarioMultiAgentEnv
 from agario_rl.rl.ppo_shared import SharedPPOTrainer
 from agario_rl.utils.logging import TrainingMetricsLogger, build_training_metrics_row
+from agario_rl.utils.device import synchronize_torch_device
 from agario_rl.utils.seeding import set_global_seeds
 
 
@@ -26,6 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--action-mode", type=str, choices=["continuous", "discrete_9way"], default=None)
+    parser.add_argument("--device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default="auto")
+    parser.add_argument("--inference-device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default=None)
     return parser.parse_args()
 
 
@@ -48,7 +52,12 @@ def main() -> None:
     set_global_seeds(config.seed)
 
     env = AgarioMultiAgentEnv(config=config, enable_render=False)
-    trainer = SharedPPOTrainer(config=config, observation_dim=env.observation_space["shape"][0])
+    trainer = SharedPPOTrainer(
+        config=config,
+        observation_dim=env.observation_space["shape"][0],
+        device=args.device,
+        inference_device=args.inference_device,
+    )
 
     logger = TrainingMetricsLogger(project_root / config.logging.train_metrics_csv)
     checkpoint_dir = project_root / args.checkpoint_dir
@@ -75,16 +84,33 @@ def main() -> None:
             f"count ({starting_update})."
         )
 
+    print(f"Using train device: {trainer.device}, inference device: {trainer.inference_device}.")
+
     for update_idx in range(starting_update + 1, args.updates + 1):
+        rollout_start = time.perf_counter()
         trainer.collect_rollout(env, target_transitions=config.rl.steps_per_update)
+        rollout_seconds = time.perf_counter() - rollout_start
+
+        synchronize_torch_device(trainer.device)
+        update_start = time.perf_counter()
         metrics = trainer.update()
+        synchronize_torch_device(trainer.device)
+        update_seconds = time.perf_counter() - update_start
+        metrics = {
+            **metrics,
+            "rollout_seconds": rollout_seconds,
+            "update_seconds": update_seconds,
+            "transitions_per_second": float(config.rl.steps_per_update) / max(rollout_seconds, 1e-9),
+        }
         logger.log(build_training_metrics_row(update=update_idx, metrics=metrics))
 
         if update_idx % config.logging.print_every_updates == 0:
             print(
                 f"[update {update_idx}] policy={metrics['policy_loss']:.4f} "
                 f"value={metrics['value_loss']:.4f} entropy={metrics['entropy']:.4f} "
-                f"imitation={metrics['imitation_loss']:.4f}"
+                f"imitation={metrics['imitation_loss']:.4f} "
+                f"rollout_s={metrics['rollout_seconds']:.2f} "
+                f"update_s={metrics['update_seconds']:.2f}"
             )
 
         if update_idx % config.logging.checkpoint_every_updates == 0:

@@ -18,6 +18,14 @@ pip install -e .[dev]
 The interactive runtime and play mode depend on the `raylib` Python package.
 The project imports it through `pyray`.
 
+If you want to test Intel Arc acceleration, install the XPU wheels in the same
+venv:
+
+```bash
+.venv\Scripts\python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+.venv\Scripts\python -c "import torch; print(torch.xpu.is_available())"
+```
+
 ## Run the main workflows
 
 Use these commands to cover the most common experiment flows.
@@ -28,7 +36,7 @@ Run a short headless training pass when you want a new sequence that starts at
 update `1`.
 
 ```bash
-python scripts/train.py --updates 10
+python scripts/train.py --updates 10 --device auto
 ```
 
 This command writes:
@@ -43,7 +51,7 @@ Run resume mode when you want to continue a checkpoint to a target milestone
 without resetting the update counter.
 
 ```bash
-python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt
+python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt --device auto
 ```
 
 ### Open the observer cockpit
@@ -82,7 +90,7 @@ extra option.
 Run a short deterministic evaluation against the latest checkpoint.
 
 ```bash
-python scripts/eval.py --episodes 5 --deterministic
+python scripts/eval.py --episodes 5 --deterministic --device auto
 ```
 
 ### Train against the mixed opponent pool
@@ -91,7 +99,7 @@ Run the human-readiness training loop when you want a fresh learner to face
 something stronger than mirror self-play.
 
 ```bash
-python scripts/train_human_ready.py --updates 80
+python scripts/train_human_ready.py --updates 80 --device auto
 ```
 
 ### Evaluate human-readiness proxies
@@ -102,6 +110,19 @@ mistakes a human punishes, such as corner camping and bad threat response.
 ```bash
 python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20
 ```
+
+### Benchmark CPU versus Intel Arc
+
+Run the training benchmark before deciding whether `xpu` helps on your
+machine.
+
+```bash
+python scripts/benchmark_perf.py --mode train --updates 2 --device cpu
+python scripts/benchmark_perf.py --mode train --updates 2 --device xpu
+```
+
+The benchmark prints rollout time and PPO update time separately. That matters
+because this project is still heavily rollout-bound.
 
 ### Benchmark step or render cost
 

@@ -20,18 +20,22 @@ from agario_rl.rendering.view_model import build_render_frame
 from agario_rl.rl.ppo_shared import SharedPPOTrainer
 from agario_rl.supervisor.controller import SupervisorController
 from agario_rl.supervisor.runtime_stats import RuntimeSessionStats
+from agario_rl.utils.device import synchronize_torch_device
 
 
 def parse_args() -> argparse.Namespace:
     parser = argparse.ArgumentParser(description="Benchmark env stepping and render performance.")
     parser.add_argument("--config", type=str, default="config/default.yaml")
-    parser.add_argument("--mode", type=str, choices=["step", "render"], default="step")
+    parser.add_argument("--mode", type=str, choices=["step", "render", "train"], default="step")
     parser.add_argument("--steps", type=int, default=400, help="Number of env steps for mode=step.")
     parser.add_argument("--frames", type=int, default=300, help="Number of frames for mode=render.")
+    parser.add_argument("--updates", type=int, default=5, help="Number of PPO updates for mode=train.")
     parser.add_argument("--overlay", type=str, choices=["minimal", "full"], default="minimal")
     parser.add_argument("--grid", action="store_true", help="Enable grid for render benchmark.")
     parser.add_argument("--headless-render", action="store_true")
     parser.add_argument("--seed", type=int, default=7)
+    parser.add_argument("--device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default="auto")
+    parser.add_argument("--inference-device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default=None)
     return parser.parse_args()
 
 
@@ -120,12 +124,48 @@ def run_render_benchmark(args: argparse.Namespace) -> None:
     env.close()
 
 
+def run_train_benchmark(args: argparse.Namespace) -> None:
+    cfg = load_config(PROJECT_ROOT / args.config)
+    env = AgarioMultiAgentEnv(cfg, enable_render=False)
+    trainer = SharedPPOTrainer(
+        cfg,
+        observation_dim=env.observation_space["shape"][0],
+        device=args.device,
+        inference_device=args.inference_device,
+    )
+    trainer.force_sync_with_env(env, seed=args.seed)
+
+    rollout_times: list[float] = []
+    update_times: list[float] = []
+    for _ in range(args.updates):
+        rollout_start = time.perf_counter()
+        trainer.collect_rollout(env, target_transitions=cfg.rl.steps_per_update)
+        rollout_times.append(time.perf_counter() - rollout_start)
+
+        synchronize_torch_device(trainer.device)
+        update_start = time.perf_counter()
+        trainer.update()
+        synchronize_torch_device(trainer.device)
+        update_times.append(time.perf_counter() - update_start)
+
+    print(
+        "mode=train "
+        f"device={trainer.device} inference_device={trainer.inference_device} updates={args.updates} "
+        f"rollout_mean_s={float(np.mean(np.array(rollout_times, dtype=np.float32))):.4f} "
+        f"update_mean_s={float(np.mean(np.array(update_times, dtype=np.float32))):.4f}"
+    )
+    env.close()
+
+
 def main() -> None:
     args = parse_args()
     if args.mode == "step":
         run_step_benchmark(args)
         return
-    run_render_benchmark(args)
+    if args.mode == "render":
+        run_render_benchmark(args)
+        return
+    run_train_benchmark(args)
 
 
 if __name__ == "__main__":

@@ -27,6 +27,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--render", action="store_true")
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--action-mode", type=str, choices=["continuous", "discrete_9way"], default=None)
+    parser.add_argument("--device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default="auto")
+    parser.add_argument("--inference-device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default=None)
     return parser.parse_args()
 
 
@@ -41,11 +43,19 @@ def main() -> None:
     set_global_seeds(config.seed)
 
     env = AgarioMultiAgentEnv(config=config, enable_render=args.render)
-    trainer = SharedPPOTrainer(config=config, observation_dim=env.observation_space["shape"][0])
+    trainer = SharedPPOTrainer(
+        config=config,
+        observation_dim=env.observation_space["shape"][0],
+        device=args.device,
+        inference_device=args.inference_device,
+    )
 
     checkpoint = Path(args.checkpoint) if args.checkpoint else (project_root / config.supervisor.checkpoint_path)
     loaded = trainer.load(checkpoint)
-    print(f"Checkpoint loaded: {loaded} ({checkpoint})")
+    print(
+        f"Checkpoint loaded: {loaded} ({checkpoint}) "
+        f"on train device {trainer.device} / inference device {trainer.inference_device}"
+    )
 
     episode_scores = []
     for episode_idx in range(args.episodes):

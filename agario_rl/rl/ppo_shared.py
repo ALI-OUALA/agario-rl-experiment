@@ -15,21 +15,38 @@ from agario_rl import AgarioConfig
 from agario_rl.rl.buffer import RolloutBatch, RolloutSample, Transition, compute_gae
 from agario_rl.rl.networks import ActorCriticNetwork
 from agario_rl.rl.peer_imitation import PeerImitationBuffer
+from agario_rl.utils.device import resolve_torch_device
 
 
 class SharedPPOTrainer:
     """Centralized PPO update loop with shared parameters for all agents."""
 
-    def __init__(self, config: AgarioConfig, observation_dim: int, device: str | None = None) -> None:
+    def __init__(
+        self,
+        config: AgarioConfig,
+        observation_dim: int,
+        device: str | None = None,
+        inference_device: str | None = None,
+    ) -> None:
         self.config = config
+        self.observation_dim = observation_dim
         self.action_mode = config.simulation.action_mode
-        self.device = torch.device(device or ("cuda" if torch.cuda.is_available() else "cpu"))
+        self.device = torch.device(resolve_torch_device(device))
+        default_inference_device = "cpu" if self.device.type == "xpu" else self.device.type
+        self.inference_device = torch.device(resolve_torch_device(inference_device or default_inference_device))
+        torch.set_float32_matmul_precision("high")
         self.policy = ActorCriticNetwork(observation_dim=observation_dim).to(self.device)
+        self.inference_policy: ActorCriticNetwork
+        if self.inference_device.type == self.device.type:
+            self.inference_policy = self.policy
+        else:
+            self.inference_policy = ActorCriticNetwork(observation_dim=observation_dim).to(self.inference_device)
         self.optimizer = optim.Adam(self.policy.parameters(), lr=config.rl.learning_rate)
         self.imitation_buffer = PeerImitationBuffer(
             capacity=config.rl.imitation_buffer_capacity,
             seed=config.seed,
         )
+        self.sync_inference_policy()
 
         self.agent_ids: list[str] = []
         self.current_obs: dict[str, np.ndarray] | None = None
@@ -77,8 +94,20 @@ class SharedPPOTrainer:
         self.last_actions = None
         return self.current_obs
 
-    def _policy_outputs(self, obs_tensor: torch.Tensor) -> dict[str, torch.Tensor]:
-        return self.policy(obs_tensor)
+    def sync_inference_policy(self) -> None:
+        """Synchronize the inference model from the train-time policy."""
+        if self.inference_policy is self.policy:
+            return
+        self.inference_policy.load_state_dict(self.policy.state_dict())
+
+    def _policy_outputs(
+        self,
+        obs_tensor: torch.Tensor,
+        *,
+        for_inference: bool = False,
+    ) -> dict[str, torch.Tensor]:
+        model = self.inference_policy if for_inference else self.policy
+        return model(obs_tensor)
 
     def _continuous_action_sample(
         self,
@@ -117,13 +146,13 @@ class SharedPPOTrainer:
         agent_ids: list[str] | None = None,
     ) -> tuple[dict[str, np.ndarray], dict[str, dict[str, float | np.ndarray]]]:
         ordered_agent_ids = list(agent_ids or self.agent_ids or sorted(obs_dict.keys()))
-        obs_batch = torch.tensor(
+        obs_batch = torch.as_tensor(
             np.stack([obs_dict[agent_id] for agent_id in ordered_agent_ids], axis=0),
             dtype=torch.float32,
-            device=self.device,
+            device=self.inference_device,
         )
-        with torch.no_grad():
-            outputs = self._policy_outputs(obs_batch)
+        with torch.inference_mode():
+            outputs = self._policy_outputs(obs_batch, for_inference=True)
             ability_dist = Categorical(logits=outputs["ability_logits"])
             ability_action = (
                 torch.argmax(outputs["ability_logits"], dim=-1)
@@ -328,13 +357,13 @@ class SharedPPOTrainer:
 
     def _bootstrap_values(self) -> dict[str, float]:
         assert self.current_obs is not None
-        obs_batch = torch.tensor(
+        obs_batch = torch.as_tensor(
             np.stack([self.current_obs[agent_id] for agent_id in self.agent_ids], axis=0),
             dtype=torch.float32,
-            device=self.device,
+            device=self.inference_device,
         )
-        with torch.no_grad():
-            values = self._policy_outputs(obs_batch)["value"]
+        with torch.inference_mode():
+            values = self._policy_outputs(obs_batch, for_inference=True)["value"]
         return {agent_id: float(values[idx].item()) for idx, agent_id in enumerate(self.agent_ids)}
 
     def _flush_trajectory(self, agent_id: str, bootstrap_value: float) -> None:
@@ -446,12 +475,12 @@ class SharedPPOTrainer:
     ) -> dict[str, float]:
         """Run PPO optimization on a provided rollout payload."""
         batch = RolloutBatch(
-            obs=torch.tensor(rollout_payload["obs"], dtype=torch.float32, device=self.device),
-            actions=torch.tensor(rollout_payload["actions"], dtype=torch.float32, device=self.device),
-            old_logprob=torch.tensor(rollout_payload["old_logprob"], dtype=torch.float32, device=self.device),
-            old_value=torch.tensor(rollout_payload["old_value"], dtype=torch.float32, device=self.device),
-            advantages=torch.tensor(rollout_payload["advantages"], dtype=torch.float32, device=self.device),
-            returns=torch.tensor(rollout_payload["returns"], dtype=torch.float32, device=self.device),
+            obs=torch.as_tensor(rollout_payload["obs"], dtype=torch.float32, device=self.device),
+            actions=torch.as_tensor(rollout_payload["actions"], dtype=torch.float32, device=self.device),
+            old_logprob=torch.as_tensor(rollout_payload["old_logprob"], dtype=torch.float32, device=self.device),
+            old_value=torch.as_tensor(rollout_payload["old_value"], dtype=torch.float32, device=self.device),
+            advantages=torch.as_tensor(rollout_payload["advantages"], dtype=torch.float32, device=self.device),
+            returns=torch.as_tensor(rollout_payload["returns"], dtype=torch.float32, device=self.device),
         )
         advantages = batch.advantages
         advantages = (advantages - advantages.mean()) / (advantages.std() + 1e-8)
@@ -465,6 +494,12 @@ class SharedPPOTrainer:
         stat_total_loss = 0.0
         stat_updates = 0
 
+        demo_obs = None
+        demo_actions = None
+        if imitation_payload is not None:
+            demo_obs = torch.as_tensor(imitation_payload["obs"], dtype=torch.float32, device=self.device)
+            demo_actions = torch.as_tensor(imitation_payload["actions"], dtype=torch.float32, device=self.device)
+
         for _ in range(self.config.rl.ppo_epochs):
             indices = torch.randperm(num_samples, device=self.device)
             for start in range(0, num_samples, minibatch_size):
@@ -475,7 +510,7 @@ class SharedPPOTrainer:
                 mb_returns = batch.returns[mb_idx]
                 mb_adv = advantages[mb_idx]
 
-                outputs = self._policy_outputs(mb_obs)
+                outputs = self._policy_outputs(mb_obs, for_inference=False)
                 new_logprob, entropy = self._compute_policy_terms(outputs, mb_actions)
                 ratio = torch.exp(new_logprob - mb_old_logprob)
                 clipped_ratio = torch.clamp(
@@ -488,9 +523,7 @@ class SharedPPOTrainer:
                 entropy_mean = entropy.mean()
 
                 imitation_loss = torch.tensor(0.0, device=self.device)
-                if imitation_payload is not None:
-                    demo_obs = torch.tensor(imitation_payload["obs"], dtype=torch.float32, device=self.device)
-                    demo_actions = torch.tensor(imitation_payload["actions"], dtype=torch.float32, device=self.device)
+                if demo_obs is not None and demo_actions is not None:
                     imitation_loss = self.compute_imitation_loss(demo_obs, demo_actions)
 
                 total_loss = (
@@ -524,6 +557,7 @@ class SharedPPOTrainer:
             "update_count": float(self.update_count),
         }
         self.policy_sync_age_steps = 0
+        self.sync_inference_policy()
         return dict(self.last_metrics)
 
     def update(self) -> dict[str, float]:
@@ -558,6 +592,7 @@ class SharedPPOTrainer:
         self.update_count = int(payload.get("update_count", self.update_count))
         self.last_metrics = dict(payload.get("last_metrics", self.last_metrics))
         self.policy_sync_age_steps = 0
+        self.sync_inference_policy()
 
     def save(self, path: str | Path) -> None:
         file_path = Path(path)

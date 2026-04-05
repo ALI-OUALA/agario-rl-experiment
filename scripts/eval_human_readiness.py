@@ -29,6 +29,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--learner-agent", type=str, default="agent_0")
     parser.add_argument("--output", type=str, default=None)
+    parser.add_argument("--device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default="auto")
+    parser.add_argument("--inference-device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default=None)
     return parser.parse_args()
 
 
@@ -47,7 +49,12 @@ def main() -> None:
 
     env = AgarioMultiAgentEnv(config=config, enable_render=False)
     learner_agent_id = args.learner_agent
-    trainer = SharedPPOTrainer(config=config, observation_dim=env.observation_space["shape"][0])
+    trainer = SharedPPOTrainer(
+        config=config,
+        observation_dim=env.observation_space["shape"][0],
+        device=args.device,
+        inference_device=args.inference_device,
+    )
     checkpoint = _resolve_path(PROJECT_ROOT, args.checkpoint)
     if not trainer.load(checkpoint):
         raise FileNotFoundError(f"Checkpoint not found: {checkpoint}")
@@ -88,6 +95,8 @@ def main() -> None:
     summary = tracker.summary()
     payload = {
         "checkpoint": str(checkpoint),
+        "device": str(trainer.device),
+        "inference_device": str(trainer.inference_device),
         "episodes": summary.episodes,
         "wins": summary.wins,
         "win_rate": summary.win_rate,

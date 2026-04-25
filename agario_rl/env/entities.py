@@ -34,6 +34,31 @@ class Pellet:
 
 
 @dataclass(slots=True)
+class Virus:
+    """A virus hazard that can split large cells or be fed by ejected mass."""
+
+    virus_id: int
+    position: np.ndarray
+    mass: float
+    fed_count: int = 0
+
+    def radius(self, radius_scale: float) -> float:
+        return radius_scale * float(np.sqrt(max(self.mass, 0.01)))
+
+
+@dataclass(slots=True)
+class EjectedMass:
+    """A moving mass pellet ejected by a cell."""
+
+    ejected_id: int
+    owner_id: str
+    position: np.ndarray
+    velocity: np.ndarray
+    mass: float
+    age_steps: int = 0
+
+
+@dataclass(slots=True)
 class AgentSnapshot:
     """Per-agent runtime metrics used for rewards and HUD."""
 
@@ -41,6 +66,15 @@ class AgentSnapshot:
     alive: bool = True
     episode_return: float = 0.0
     eliminated_opponents: int = 0
+    nearest_threat_distance: float | None = None
+    nearest_target_distance: float | None = None
+    last_reward_breakdown: dict[str, float] = field(default_factory=dict)
+    virus_splits: int = 0
+    respawns: int = 0
+    split_attempts: int = 0
+    successful_splits: int = 0
+    unsafe_splits: int = 0
+    useful_splits: int = 0
     recent_direction_counts: list[int] = field(default_factory=lambda: [0] * 9)
 
     def record_direction(self, direction_idx: int) -> None:

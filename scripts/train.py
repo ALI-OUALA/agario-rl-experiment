@@ -11,7 +11,7 @@ PROJECT_ROOT = Path(__file__).resolve().parents[1]
 if str(PROJECT_ROOT) not in sys.path:
     sys.path.insert(0, str(PROJECT_ROOT))
 
-from agario_rl import load_config
+from agario_rl import apply_scenario_preset, load_config
 from agario_rl.env.gym_env import AgarioMultiAgentEnv
 from agario_rl.rl.ppo_shared import SharedPPOTrainer
 from agario_rl.utils.logging import TrainingMetricsLogger, build_training_metrics_row
@@ -28,6 +28,8 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--action-mode", type=str, choices=["continuous", "discrete_9way"], default=None)
+    parser.add_argument("--scenario-preset", type=str, choices=["classic", "agario_curriculum", "full_arena"], default="classic")
+    parser.add_argument("--continuing-respawn", action="store_true")
     parser.add_argument("--device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default="auto")
     parser.add_argument("--inference-device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default=None)
     return parser.parse_args()
@@ -49,6 +51,9 @@ def main() -> None:
         config.seed = int(args.seed)
     if args.action_mode is not None:
         config.simulation.action_mode = args.action_mode
+    apply_scenario_preset(config, args.scenario_preset)
+    if args.continuing_respawn:
+        config.simulation.continuing_respawn = True
     set_global_seeds(config.seed)
 
     env = AgarioMultiAgentEnv(config=config, enable_render=False)

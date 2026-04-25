@@ -15,7 +15,7 @@ if str(PROJECT_ROOT) not in sys.path:
 from agario_rl import load_config
 from agario_rl.env.gym_env import AgarioMultiAgentEnv
 from agario_rl.human_eval import HumanReadinessTracker
-from agario_rl.opponents import build_default_opponent_pool
+from agario_rl.opponents import assign_opponents, build_default_opponent_pool
 from agario_rl.rl.ppo_shared import SharedPPOTrainer
 from agario_rl.utils.seeding import set_global_seeds
 
@@ -69,11 +69,7 @@ def main() -> None:
 
     for episode_idx in range(args.episodes):
         observations = trainer.force_sync_with_env(env, seed=config.seed + episode_idx)
-        active_policies = rng.sample(opponent_pool, k=len(opponent_agent_ids))
-        active_opponents = {
-            agent_id: policy
-            for agent_id, policy in zip(opponent_agent_ids, active_policies, strict=True)
-        }
+        active_opponents = assign_opponents(opponent_pool, opponent_agent_ids, rng)
 
         done = False
         while not done:

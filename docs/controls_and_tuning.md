@@ -6,31 +6,39 @@ groups have the highest leverage when you tune experiments.
 
 ## Cockpit layout
 
-The runtime uses a single-window layout with a world viewport on the left and a
-control and telemetry panel on the right.
+The runtime defaults to an Agar.io-style full-window arena. Compact telemetry
+is drawn over the arena so training remains visible without shrinking the
+world. Press `Tab` to open the full cockpit drawer when you need detailed
+controls and charts.
 
-### World viewport
+### Arena viewport
 
 The world viewport shows the active simulation with camera smoothing and render
 interpolation. The simulation timestep stays authoritative, and rendering only
 interpolates between stored cell positions.
 
-The viewport also includes:
+The arena also includes:
 
-- a status banner for checkpoint and runtime messages
-- a focus chip showing the active camera mode and target
+- a leaderboard, score chip, minimap, and compact training metrics
+- a status chip for checkpoint and runtime messages
 - an optional world grid
+- viruses, ejected mass, agent labels, and intent arrows when the upgraded
+  scenario or high render detail is active
 
-### Side panel
+### Full telemetry drawer
 
-The side panel groups the operator-facing information into stable blocks.
+The full drawer opens with `Tab` and groups the operator-facing information
+into stable blocks.
 
 - **Session cards** show state, speed, FPS, frame time, physics throughput,
   queue depth, and update count.
 - **Training cards** show policy, value, entropy, imitation loss, and sync age.
+- **Scenario strip** shows the active scenario name, stage, and preset.
 - **Control surface** exposes the runtime actions as clickable buttons.
 - **Agent observer cards** show alive state, mass, return, eliminations, wins,
   and focus state.
+- **Reward breakdown** shows the strongest recent reward components for each
+  agent.
 - **Live telemetry** shows rolling mini-charts for FPS, reward, loss, wins,
   and updates.
 
@@ -115,6 +123,8 @@ Use `simulation.*` to control pacing and camera feel.
 - `max_substeps_per_frame`: frame backlog cap
 - `camera_smoothness`: camera tracking response
 - `zoom_smoothness`: zoom response
+- `continuing_respawn`: respawn eliminated agents instead of ending the round
+- `respawn_mass`: starting mass for continuing-mode respawns
 
 ### Physics
 
@@ -125,6 +135,47 @@ Use `physics.*` to change the environment itself.
 - merge timing
 - eating threshold and assimilation efficiency
 - cell count cap
+- ejected mass amount, cooldown, and speed
+
+### Viruses and mass decay
+
+Use these groups when you want the richer Agar.io-style simulator.
+
+- `viruses.*`: virus count, mass, feeding threshold, split pieces, and spawn
+  behavior
+- `mass_decay.*`: passive mass decay rate and minimum mass floor
+
+The classic preset leaves viruses and mass decay disabled by default.
+
+### Observation and reward extensions
+
+Use these groups when you want training signals that are more aligned with
+visible play.
+
+- `observation_features.*`: additive threat, target, virus, split-ready, and
+  eject-ready features
+- `reward_terms.*`: threat escape, target pressure, corner penalty, survival
+  quality, split safety, virus split, and respawn reward components
+
+These fields are additive. When `observation_features.enabled` is false, the
+classic observation vector remains unchanged.
+
+### Scenario presets
+
+Use `scenario_curriculum.*` to label and stage the upgraded environment.
+`agario_curriculum` moves through:
+
+- `pellet_growth`
+- `evasion`
+- `hunting`
+- `virus_control`
+- `mixed_arena`
+- `full_arena`
+
+Early stages keep the world simpler. Later stages unlock virus behavior and
+the full arena. `full_arena` skips the staged ramp and starts with the large
+2000-style map, more agent slots, more pellets, viruses, eject support, and
+continuing respawn.
 
 ### Rewards and PPO
 
@@ -132,7 +183,12 @@ Use `rewards.*` and `rl.*` when behavior quality matters more than visual
 presentation.
 
 - reward shaping determines aggression and survival bias
+- split shaping discourages repeated split attempts, penalizes splits near
+  larger threats or dangerous viruses, and rewards splits only when a close
+  weak target makes the attack useful
 - PPO clip, learning rate, and epoch count affect update stability
+- `rl.split_logit_bias` and `rl.unready_split_logit_penalty` make the policy
+  less eager to split before reward feedback arrives
 - imitation settings affect how strongly the best agent influences the others
 
 ### Async training
@@ -148,12 +204,32 @@ Use `async_training.*` when the cockpit must stay responsive during training.
 Use `render.*` when you want to change the public runtime presentation.
 
 - `window_width` and `window_height`: viewport size
-- `side_panel_width`: full cockpit side panel width
+- `side_panel_width`: full telemetry drawer width
 - `start_fullscreen`: fullscreen startup toggle
 - `window_resizable`: enable live resize behavior
 - `overlay_mode_default`: compact or full startup layout
 - `grid_enabled_default`: grid state at startup
 - `fps`: target render FPS
+- `show_agent_labels`: agent label visibility
+- `show_score_chip`: bottom-left viewport chip visibility
+
+## Scenario and showcase commands
+
+Use these commands when you want the upgraded simulator to train or run as a
+visible no-save showcase.
+
+```powershell
+python scripts/train.py --updates 20 --scenario-preset agario_curriculum --continuing-respawn --device auto
+```
+
+```powershell
+python scripts/showcase.py
+```
+
+The supported scenario presets are `classic`, `agario_curriculum`, and
+`full_arena`. The removed `scripts/supervise.py` command is no longer part of
+the public workflow; use `scripts/showcase.py` for presentation and
+`scripts/train.py` for training.
 
 ## Human-play fairness
 

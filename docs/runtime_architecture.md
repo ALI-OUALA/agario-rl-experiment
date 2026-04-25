@@ -22,6 +22,12 @@ The interactive runtime is built from four pieces.
 `AgarioWorld` owns the deterministic simulation. `AgarioMultiAgentEnv` wraps
 that world and exposes reset, step, render, and renderer command polling.
 
+The world now has two modes. The default classic mode keeps the earlier
+pellet, split, merge, and eating behavior. The scenario preset path adds
+viruses, moving ejected mass, virus feeding, mass decay, continuing respawn,
+extra reward terms, and additive observation features without changing the
+public `reset()` and `step(actions)` interface.
+
 ### Trainer and async worker
 
 `SharedPPOTrainer` owns rollout collection, PPO updates, imitation replay, and
@@ -41,6 +47,33 @@ cockpit banner.
 `build_render_frame()` converts world state, trainer metrics, controller state,
 and telemetry history into an immutable `RenderFrame`. The renderer reads that
 payload and nothing else.
+
+The upgraded frame model includes optional `VirusFrame`,
+`EjectedMassFrame`, `AgentIntentFrame`, `RewardBreakdownFrame`, and
+`ScenarioFrame` payloads. These fields let the cockpit show richer training
+state without letting Raylib inspect trainer internals.
+
+## Simulator upgrade flow
+
+The upgraded simulator keeps the classic flow intact, then adds optional
+mechanics when config or CLI flags enable them.
+
+- `viruses.*` controls virus count, mass, feeding, and split behavior.
+- `mass_decay.*` controls passive mass loss over time.
+- `simulation.continuing_respawn` keeps eliminated agents in the arena by
+  respawning them with `simulation.respawn_mass`.
+- `observation_features.*` appends threat, target, virus, split-ready, and
+  eject-ready features after the classic observation vector.
+- `reward_terms.*` adds reward breakdown components for threat escape, target
+  pressure, corner avoidance, survival quality, virus splits, and respawns.
+- `scenario_curriculum.*` labels the current stage and unlocks richer
+  mechanics as the stage advances.
+
+Classic runs leave these additions disabled by default. The
+`--scenario-preset agario_curriculum` flag enables the staged upgraded path.
+The `--scenario-preset full_arena` flag enables the large 2000-style arena,
+more agents, more pellets, viruses, eject support, and continuing respawn
+through `apply_scenario_preset()`.
 
 ## Runtime flow
 
@@ -65,6 +98,8 @@ The snapshot model keeps the runtime easier to evolve because:
 - the controller does not depend on Raylib key codes
 - tests can validate frame construction separately from window creation
 - local camera and fullscreen behavior stay isolated in the renderer
+- new simulator objects can be added to frame payloads without changing the
+  trainer or environment API
 
 ## Semantic command model
 
@@ -94,6 +129,19 @@ history used by the charts. The current cockpit charts track:
 
 The chart history is lightweight and exists only to support operator
 visibility.
+
+## Cockpit training visibility
+
+The cockpit surfaces training state in two places. The world viewport shows
+cells, pellets, viruses, ejected mass, focus rings, labels, and agent intent
+arrows. Minimal mode keeps the arena full-window and draws compact training
+overlays for status, score, leaderboard, minimap, FPS, reward, loss, and
+updates. Full mode opens the telemetry drawer with scenario state, PPO
+metrics, agent cards, reward breakdowns, controls, and rolling charts.
+
+Use `scripts/showcase.py` when you want the richest large-arena view without
+writing checkpoints or logs. Training now stays in `scripts/train.py` and
+`scripts/train_human_ready.py`.
 
 ## Renderer boundary
 

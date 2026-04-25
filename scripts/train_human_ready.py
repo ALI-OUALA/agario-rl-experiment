@@ -14,7 +14,7 @@ if str(PROJECT_ROOT) not in sys.path:
 
 from agario_rl import load_config
 from agario_rl.env.gym_env import AgarioMultiAgentEnv
-from agario_rl.opponents import OpponentPolicy, build_default_opponent_pool
+from agario_rl.opponents import assign_opponents, build_default_opponent_pool
 from agario_rl.rl.ppo_shared import SharedPPOTrainer
 from agario_rl.utils.device import synchronize_torch_device
 from agario_rl.utils.logging import TrainingMetricsLogger, build_training_metrics_row
@@ -22,12 +22,14 @@ from agario_rl.utils.seeding import set_global_seeds
 
 
 def parse_args() -> argparse.Namespace:
-    parser = argparse.ArgumentParser(description="Train from scratch against scripted and frozen opponents.")
+    parser = argparse.ArgumentParser(description="Train against scripted and frozen opponents.")
     parser.add_argument("--config", type=str, default="config/default.yaml")
     parser.add_argument("--updates", type=int, default=100)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--opponent-checkpoint", type=str, default="checkpoints/checkpoint_00500.pt")
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints/human_ready_v1")
+    parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--resume", action="store_true")
     parser.add_argument("--metrics-csv", type=str, default="logs/human_ready_v1_train_metrics.csv")
     parser.add_argument("--learner-agent", type=str, default="agent_0")
     parser.add_argument("--device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default="auto")
@@ -45,18 +47,6 @@ def _episode_done(infos: dict[str, dict[str, object]], max_steps: int) -> bool:
     if not global_info:
         return False
     return int(global_info.get("step", 0)) >= max_steps or int(global_info.get("alive_count", 99)) <= 1
-
-
-def _sample_opponents(
-    pool: list[OpponentPolicy],
-    opponent_agent_ids: list[str],
-    rng: random.Random,
-) -> dict[str, OpponentPolicy]:
-    sampled = rng.sample(pool, k=len(opponent_agent_ids))
-    return {
-        agent_id: policy
-        for agent_id, policy in zip(opponent_agent_ids, sampled, strict=True)
-    }
 
 
 def main() -> None:
@@ -85,19 +75,36 @@ def main() -> None:
     opponent_checkpoint = _resolve_path(PROJECT_ROOT, args.opponent_checkpoint)
     opponent_pool = build_default_opponent_pool(config=config, checkpoint_path=opponent_checkpoint)
     rng = random.Random(config.seed)
-    active_opponents = _sample_opponents(opponent_pool, opponent_agent_ids, rng)
+    active_opponents = assign_opponents(opponent_pool, opponent_agent_ids, rng)
 
     checkpoint_dir = _resolve_path(PROJECT_ROOT, args.checkpoint_dir)
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     latest_checkpoint = checkpoint_dir / "latest.pt"
+    checkpoint_path = _resolve_path(PROJECT_ROOT, args.checkpoint) if args.checkpoint else latest_checkpoint
     metrics_logger = TrainingMetricsLogger(_resolve_path(PROJECT_ROOT, args.metrics_csv))
 
     physics_dt = 1.0 / max(1, int(config.simulation.physics_hz))
     substeps = max(1, int(round(config.simulation.physics_hz / config.simulation.decision_hz)))
 
+    starting_update = 0
+    if args.resume:
+        loaded = trainer.load(checkpoint_path)
+        if not loaded:
+            raise FileNotFoundError(
+                f"Resume requested but checkpoint was not found at {checkpoint_path}."
+            )
+        starting_update = trainer.update_count
+        print(f"Resuming from update {starting_update} using {checkpoint_path}.")
+
+    if args.updates < starting_update:
+        raise ValueError(
+            f"Target updates ({args.updates}) must be >= current checkpoint update "
+            f"count ({starting_update})."
+        )
+
     print(f"Using train device: {trainer.device}, inference device: {trainer.inference_device}.")
 
-    for update_idx in range(1, args.updates + 1):
+    for update_idx in range(starting_update + 1, args.updates + 1):
         rollout_start = time.perf_counter()
         while trainer.transitions_since_update < config.rl.steps_per_update:
             assert trainer.current_obs is not None
@@ -119,7 +126,7 @@ def main() -> None:
                 policy_agent_ids=[learner_agent_id],
             )
             if _episode_done(infos, config.max_steps):
-                active_opponents = _sample_opponents(opponent_pool, opponent_agent_ids, rng)
+                active_opponents = assign_opponents(opponent_pool, opponent_agent_ids, rng)
         rollout_seconds = time.perf_counter() - rollout_start
 
         synchronize_torch_device(trainer.device)
@@ -144,7 +151,9 @@ def main() -> None:
         if update_idx % config.logging.checkpoint_every_updates == 0:
             trainer.save(checkpoint_dir / f"checkpoint_{update_idx:05d}.pt")
 
-    trainer.save(latest_checkpoint)
+    trainer.save(checkpoint_path)
+    if checkpoint_path != latest_checkpoint:
+        trainer.save(latest_checkpoint)
     env.close()
     print(f"Human-ready training complete. Latest checkpoint: {latest_checkpoint}")
 

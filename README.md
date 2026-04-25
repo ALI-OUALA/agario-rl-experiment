@@ -6,25 +6,134 @@ Raylib cockpit, evaluate checkpoints, train against stronger scripted and
 frozen opponents, and play directly against the trained agents in a dedicated
 human mode.
 
-As of April 4, 2026, the repo includes:
+## Copy-paste commands
+
+If you only want the commands, start here.
+
+### Create and activate the venv
+
+```powershell
+python -m venv .venv
+```
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+### Install the project
+
+```powershell
+python -m pip install -e .[dev]
+```
+
+### Optional: install Intel Arc XPU wheels
+
+```powershell
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+```
+
+### Optional: verify Intel Arc detection
+
+```powershell
+python -c "import torch; print(torch.xpu.is_available())"
+```
+
+### Train from scratch
+
+```powershell
+python scripts/train.py --updates 20 --device auto
+```
+
+### Train with the scenario curriculum
+
+```powershell
+python scripts/train.py --updates 20 --scenario-preset agario_curriculum --continuing-respawn --device auto
+```
+
+### Resume the main checkpoint
+
+```powershell
+python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt --device auto
+```
+
+### Run a no-save showcase demo
+
+```powershell
+python scripts/showcase.py
+```
+
+### Play against the current agents
+
+```powershell
+python scripts/play.py --checkpoint checkpoints/latest.pt
+```
+
+### Evaluate the current checkpoint
+
+```powershell
+python scripts/eval.py --checkpoint checkpoints/latest.pt --episodes 5 --deterministic --device auto
+```
+
+### Train the mixed-opponent human-ready run
+
+```powershell
+python scripts/train_human_ready.py --updates 80 --device auto
+```
+
+### Resume the mixed-opponent human-ready run
+
+```powershell
+python scripts/train_human_ready.py --resume --updates 160 --checkpoint checkpoints/human_ready_v1/latest.pt --checkpoint-dir checkpoints/human_ready_v1 --metrics-csv logs/human_ready_v1_train_metrics.csv --opponent-checkpoint checkpoints/checkpoint_00500.pt --device cpu --inference-device cpu
+```
+
+### Evaluate human-readiness
+
+```powershell
+python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20 --device auto
+```
+
+### Benchmark CPU versus Intel Arc
+
+```powershell
+python scripts/benchmark_perf.py --mode train --updates 2 --device cpu
+```
+
+```powershell
+python scripts/benchmark_perf.py --mode train --updates 2 --device xpu
+```
+
+## Current project state
+
+As of April 21, 2026, the repo includes:
 
 - the original self-play checkpoint line continued from update `366` to
   update `500`
 - a fresh `human_ready_v1` retrain from scratch against a mixed opponent pool
 - human-readiness proxy metrics that measure corner camping, threat response,
   and pressure on smaller targets
+- Intel Arc / XPU support in the training and evaluation entrypoints
+- an optional Agar.io-style simulator upgrade with viruses, ejected mass,
+  mass decay, continuing respawn, richer observation features, reward
+  breakdowns, and a scenario-curriculum preset
+- an arena-first Raylib cockpit that can show viruses, ejected mass, agent
+  intent, leaderboard, minimap, compact training metrics, scenario state, and
+  per-agent reward components
 
 ## Project overview
 
-The project keeps the experiment contract intentionally stable. The trained
-agents still use the same observation space, action space, reward shaping, and
-shared-policy PPO setup that the earlier milestones used.
+The project keeps the default experiment contract intentionally stable. Classic
+training still uses the same reset, step, continuous action, and shared-policy
+PPO entrypoints. The newer simulator mechanics are additive and activate
+through config fields, the staged `--scenario-preset agario_curriculum` flag,
+or the large `--scenario-preset full_arena` flag.
 
 - Deterministic 2D world simulation with pellets, split, merge, and cell
   eating.
+- Optional Agar.io-style mechanics for viruses, ejected mass feeding, mass
+  decay, continuing respawn, and scenario-based virus unlocks.
 - Shared-parameter PPO with GAE, entropy regularization, and peer imitation.
-- Async training support for the observer cockpit.
-- Raylib observer cockpit for live control, telemetry, and checkpointing.
+- Raylib showcase and play surfaces for live telemetry, reward breakdowns,
+  agent intent, scenario state, and human-facing checks.
 - Dedicated human-play mode with `1` player and `2` trained agents.
 - Mixed-opponent training against the frozen `500` checkpoint plus scripted
   bots.
@@ -45,9 +154,11 @@ matter most when you run or extend the experiment.
   stats.
 - `agario_rl/play/`: human input adapter and headless-ready human-vs-bots
   session wrapper.
+- `agario_rl/utils/device.py`: torch device detection with Intel XPU support.
 - `scripts/train.py`: headless training entrypoint with resume-to-target
-  milestone support.
-- `scripts/supervise.py`: interactive observer cockpit entrypoint.
+  milestone support and scenario-preset flags.
+- `scripts/showcase.py`: no-save full-arena demo for visitors and quick smoke
+  checks.
 - `scripts/play.py`: human-playable mode against the trained agents.
 - `scripts/eval.py`: deterministic checkpoint evaluation.
 - `scripts/train_human_ready.py`: fresh training against scripted and frozen
@@ -56,17 +167,22 @@ matter most when you run or extend the experiment.
   readiness.
 - `scripts/generate_report_assets.py`: chart generation for documentation.
 - `docs/`: experiment report, blog draft, and reference docs.
-- `agario_rl/utils/device.py`: torch device detection with Intel XPU support.
 
-## Install
+## Install notes
 
 Start in the project root, create a virtual environment, and install the
 project in editable mode.
 
-```bash
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
-pip install -e .[dev]
+```
+
+```powershell
+.\.venv\Scripts\Activate.ps1
+```
+
+```powershell
+python -m pip install -e .[dev]
 ```
 
 The interactive runtime and play mode depend on the `raylib` Python package,
@@ -75,24 +191,28 @@ which is imported through `pyray`.
 If you want to test Intel Arc acceleration, install the XPU wheels in the
 project venv and verify detection:
 
-```bash
-.venv\Scripts\python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
-.venv\Scripts\python -c "import torch; print(torch.xpu.is_available())"
+```powershell
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+```
+
+```powershell
+python -c "import torch; print(torch.xpu.is_available())"
 ```
 
 The trainer now supports `--device xpu`, but this repo is still heavily
 rollout-bound, so GPU is not automatically faster.
 
-## Run the main workflows
+## Main workflows
 
-The project now supports five common flows: fresh training, resumed training,
-supervision, play mode, and evaluation.
+The project supports seven common flows: fresh training, scenario-curriculum
+training, resumed training, no-save showcase, play mode, mixed-opponent
+retraining, and evaluation.
 
 ### Train from scratch
 
-Use a fresh run when you want a new training series that starts at update `1`.
+Run a fresh sequence that starts at update `1`.
 
-```bash
+```powershell
 python scripts/train.py --updates 20 --device auto
 ```
 
@@ -102,12 +222,34 @@ This command writes:
 - numbered checkpoints to `checkpoints/checkpoint_*.pt`
 - the latest training state to `checkpoints/latest.pt`
 
+### Train with the scenario curriculum
+
+Use the scenario preset when you want the upgraded environment instead of the
+classic baseline.
+
+```powershell
+python scripts/train.py --updates 20 --scenario-preset agario_curriculum --continuing-respawn --device auto
+```
+
+This command keeps the same public environment API, but it turns on richer
+training signals:
+
+- viruses and ejected mass feeding
+- mass decay and continuing respawn
+- additive observation features for threats, targets, viruses, and readiness
+- reward terms for threat escape, target pressure, corner avoidance, survival
+  quality, virus splits, and respawn penalties
+- staged scenario names from `pellet_growth` through `full_arena`
+
+It writes to the same default outputs as classic training:
+`logs/train_metrics.csv`, `checkpoints/checkpoint_*.pt`, and
+`checkpoints/latest.pt`.
+
 ### Resume to a target milestone
 
-Use resume mode when you want to continue a saved checkpoint without resetting
-the update counter.
+Continue a saved checkpoint without resetting the update counter.
 
-```bash
+```powershell
 python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt --device auto
 ```
 
@@ -115,25 +257,28 @@ If the checkpoint already stores `update_count=366`, this command runs updates
 `367` through `500`, updates `checkpoints/latest.pt`, and writes
 `checkpoints/checkpoint_00500.pt`.
 
-### Open the observer cockpit
+### Run a no-save showcase
 
-Use the observer cockpit when you want to inspect behavior, step the
-simulation, or continue training interactively.
+Use the showcase when you want to present the experiment without writing
+checkpoints or logs. It opens the large arena, uses the human-ready checkpoint
+when it can load, and falls back to the scripted opponent pool when it cannot.
 
-```bash
-python scripts/supervise.py --load-checkpoint
+```powershell
+python scripts/showcase.py
 ```
 
-The cockpit uses the same canonical metrics file as headless training, so new
-interactive updates append cleanly instead of starting a second numbering
-series.
+For CI or a quick smoke test, run it headless:
+
+```powershell
+python scripts/showcase.py --headless --seconds 5 --checkpoint checkpoints/missing_showcase.pt
+```
 
 ### Play against the trained agents
 
 Use play mode when you want a human-readable feel check without changing the
 trained-agent interface.
 
-```bash
+```powershell
 python scripts/play.py --checkpoint checkpoints/latest.pt
 ```
 
@@ -152,8 +297,8 @@ trained to answer, which made the comparison unfair.
 Use evaluation when you want a deterministic score pass against the saved
 policy.
 
-```bash
-python scripts/eval.py --episodes 5 --deterministic
+```powershell
+python scripts/eval.py --checkpoint checkpoints/latest.pt --episodes 5 --deterministic --device auto
 ```
 
 ### Train against stronger opponents
@@ -161,13 +306,22 @@ python scripts/eval.py --episodes 5 --deterministic
 Use the mixed-opponent training path when you want to train against something
 closer to what a human exposes.
 
-```bash
+```powershell
 python scripts/train_human_ready.py --updates 80 --device auto
+```
+
+If you want to continue the current `human_ready_v1` checkpoint instead of
+starting a fresh run, use:
+
+```powershell
+python scripts/train_human_ready.py --resume --updates 160 --checkpoint checkpoints/human_ready_v1/latest.pt --checkpoint-dir checkpoints/human_ready_v1 --metrics-csv logs/human_ready_v1_train_metrics.csv --opponent-checkpoint checkpoints/checkpoint_00500.pt --device cpu --inference-device cpu
 ```
 
 This run trains a fresh learner from scratch against:
 
 - the frozen `checkpoint_00500.pt` policy
+- an Agar-style objective bot that survives first, grows second, and splits on
+  close weak targets
 - a pellet-foraging scripted bot
 - a threat-aware evasive scripted bot
 - an opportunistic hunter scripted bot
@@ -180,8 +334,8 @@ The latest mixed-opponent checkpoint is written to
 Use the proxy evaluator when you want metrics that are more aligned with human
 matches than raw PPO loss.
 
-```bash
-python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20
+```powershell
+python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20 --device auto
 ```
 
 The current proxy metrics are:
@@ -200,8 +354,11 @@ The current proxy metrics are:
 
 Use the training benchmark before assuming GPU will help.
 
-```bash
+```powershell
 python scripts/benchmark_perf.py --mode train --updates 2 --device cpu
+```
+
+```powershell
 python scripts/benchmark_perf.py --mode train --updates 2 --device xpu
 ```
 
@@ -214,13 +371,13 @@ numbers separately.
 Use the asset generator when you want to rebuild the local charts used by the
 experiment report and the blog draft.
 
-```bash
+```powershell
 python scripts/generate_report_assets.py --baseline-eval -2.211 --final-eval -6.284
 ```
 
 ## Latest experiment snapshot
 
-The current repository includes three reportable milestones.
+The current repository includes four reportable milestones.
 
 | Milestone | Source | Quick read |
 | --- | --- | --- |
@@ -233,17 +390,17 @@ Read the full interpretation in [docs/experiment-results.md](docs/experiment-res
 
 ## Documentation map
 
-The documentation is now split by job rather than by audience guesswork.
+The documentation is split by job rather than by audience guesswork.
 
 - [docs/quickstart.md](docs/quickstart.md): shortest path to install, train,
-  supervise, play, and evaluate.
+  showcase, play, and evaluate.
 - [docs/experiment-results.md](docs/experiment-results.md): milestone-based
   experiment report with the `100`, `300`, `366`, `500`, and
   `human_ready_v1` observations.
 - [docs/blog-case-study.md](docs/blog-case-study.md): hybrid technical and
   build-story blog draft with local chart assets.
-- [docs/controls_and_tuning.md](docs/controls_and_tuning.md): observer cockpit
-  controls and config tuning.
+- [docs/controls_and_tuning.md](docs/controls_and_tuning.md): render controls
+  and config tuning.
 - [docs/runtime_architecture.md](docs/runtime_architecture.md): snapshot-driven
   runtime design.
 - [docs/how_it_learns.md](docs/how_it_learns.md): concise PPO and imitation

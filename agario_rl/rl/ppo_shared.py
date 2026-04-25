@@ -139,6 +139,28 @@ class SharedPPOTrainer:
         steer_entropy = steer_dist.entropy().sum(dim=-1)
         return steer_logprob, steer_entropy
 
+    def _ability_logits(
+        self,
+        outputs: dict[str, torch.Tensor],
+        obs_tensor: torch.Tensor | None = None,
+    ) -> torch.Tensor:
+        logits = outputs["ability_logits"].clone()
+        split_bias = float(getattr(self.config.rl, "split_logit_bias", 0.0))
+        if split_bias:
+            logits[:, 1] = logits[:, 1] + split_bias
+
+        unready_penalty = float(getattr(self.config.rl, "unready_split_logit_penalty", 0.0))
+        if (
+            obs_tensor is not None
+            and unready_penalty > 0.0
+            and self.config.observation_features.enabled
+            and self.config.observation_features.include_eject_state
+            and obs_tensor.shape[-1] >= 2
+        ):
+            split_ready = obs_tensor[:, -2].clamp(0.0, 1.0)
+            logits[:, 1] = logits[:, 1] - (1.0 - split_ready) * unready_penalty
+        return logits
+
     def _policy_step(
         self,
         obs_dict: dict[str, np.ndarray],
@@ -153,9 +175,10 @@ class SharedPPOTrainer:
         )
         with torch.inference_mode():
             outputs = self._policy_outputs(obs_batch, for_inference=True)
-            ability_dist = Categorical(logits=outputs["ability_logits"])
+            ability_logits = self._ability_logits(outputs, obs_batch)
+            ability_dist = Categorical(logits=ability_logits)
             ability_action = (
-                torch.argmax(outputs["ability_logits"], dim=-1)
+                torch.argmax(ability_logits, dim=-1)
                 if deterministic
                 else ability_dist.sample()
             )
@@ -397,7 +420,7 @@ class SharedPPOTrainer:
         """Compute imitation objective on provided observations/actions."""
         outputs = self._policy_outputs(obs)
         ability_target = torch.round(actions[:, -1]).long().clamp(min=0, max=1)
-        ability_loss = F.cross_entropy(outputs["ability_logits"], ability_target)
+        ability_loss = F.cross_entropy(self._ability_logits(outputs, obs), ability_target)
         if self.action_mode == "continuous":
             steer_target = actions[:, :2]
             steer_loss = F.mse_loss(torch.tanh(outputs["steer_mean"]), steer_target)
@@ -447,9 +470,10 @@ class SharedPPOTrainer:
         self,
         outputs: dict[str, torch.Tensor],
         actions: torch.Tensor,
+        obs: torch.Tensor | None = None,
     ) -> tuple[torch.Tensor, torch.Tensor]:
         ability_action = torch.round(actions[:, -1]).long().clamp(min=0, max=1)
-        ability_dist = Categorical(logits=outputs["ability_logits"])
+        ability_dist = Categorical(logits=self._ability_logits(outputs, obs))
         ability_logprob = ability_dist.log_prob(ability_action)
         ability_entropy = ability_dist.entropy()
 
@@ -511,7 +535,7 @@ class SharedPPOTrainer:
                 mb_adv = advantages[mb_idx]
 
                 outputs = self._policy_outputs(mb_obs, for_inference=False)
-                new_logprob, entropy = self._compute_policy_terms(outputs, mb_actions)
+                new_logprob, entropy = self._compute_policy_terms(outputs, mb_actions, mb_obs)
                 ratio = torch.exp(new_logprob - mb_old_logprob)
                 clipped_ratio = torch.clamp(
                     ratio,

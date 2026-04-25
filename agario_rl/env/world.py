@@ -9,7 +9,7 @@ from typing import Any
 import numpy as np
 
 from agario_rl import AgarioConfig
-from agario_rl.env.entities import AgentSnapshot, Cell, Pellet
+from agario_rl.env.entities import AgentSnapshot, Cell, EjectedMass, Pellet, Virus
 from agario_rl.utils.seeding import make_rng
 
 
@@ -53,9 +53,17 @@ class AgarioWorld:
         self.step_count = 0
         self.next_cell_id = 0
         self.next_pellet_id = 0
+        self.next_virus_id = 0
+        self.next_ejected_id = 0
         self.agents: dict[str, list[Cell]] = {}
         self.pellets: list[Pellet] = []
+        self.viruses: list[Virus] = []
+        self.ejected_masses: list[EjectedMass] = []
         self.prev_cell_positions: dict[int, np.ndarray] = {}
+        self.step_split_attempts: dict[str, int] = {}
+        self.step_successful_splits: dict[str, int] = {}
+        self.step_unsafe_splits: dict[str, int] = {}
+        self.step_useful_splits: dict[str, int] = {}
         self.snapshots: dict[str, AgentSnapshot] = {
             agent_id: AgentSnapshot() for agent_id in self.agent_ids
         }
@@ -68,7 +76,15 @@ class AgarioWorld:
         pellet_features = self.config.nearest_pellets * 3
         opp_features = self.config.nearest_opponents * 4
         global_features = 4
-        return self_features + pellet_features + opp_features + global_features
+        extra_features = 0
+        if self.config.observation_features.enabled:
+            if self.config.observation_features.include_threats:
+                extra_features += 8
+            if self.config.observation_features.include_viruses:
+                extra_features += 3
+            if self.config.observation_features.include_eject_state:
+                extra_features += 2
+        return self_features + pellet_features + opp_features + global_features + extra_features
 
     @property
     def alive_agents(self) -> list[str]:
@@ -80,6 +96,29 @@ class AgarioWorld:
         base = (area / 10_000.0) * float(self.config.map.pellets_per_10k_area)
         return max(20, int(base))
 
+    @property
+    def target_virus_count(self) -> int:
+        if not self.config.viruses.enabled:
+            return 0
+        target = min(self.config.viruses.initial_count, self.config.viruses.max_count)
+        if not self.config.scenario_curriculum.enabled:
+            return target
+        scenario = self.scenario_name
+        if scenario in {"pellet_growth", "evasion", "hunting"}:
+            return 0
+        if scenario == "virus_control":
+            return max(1, target // 2)
+        return target
+
+    @property
+    def scenario_name(self) -> str:
+        if not self.config.scenario_curriculum.enabled:
+            return str(self.config.scenario_curriculum.preset)
+        names = self.config.scenario_curriculum.stage_names
+        if not names:
+            return str(self.config.scenario_curriculum.preset)
+        return names[min(self.stage, len(names) - 1)]
+
     def reset(self, seed: int | None = None) -> dict[str, np.ndarray]:
         """Reset the world and return initial observations."""
         if seed is not None:
@@ -89,6 +128,8 @@ class AgarioWorld:
         self.last_winner = None
         self.next_cell_id = 0
         self.next_pellet_id = 0
+        self.next_virus_id = 0
+        self.next_ejected_id = 0
         self.agents = {agent_id: [] for agent_id in self.agent_ids}
 
         positions = self._sample_spawn_positions(self.config.num_agents)
@@ -107,7 +148,10 @@ class AgarioWorld:
             self.snapshots[agent_id] = AgentSnapshot(total_mass=cell.mass, alive=True)
 
         self.pellets = []
+        self.viruses = []
+        self.ejected_masses = []
         self._respawn_pellets(force_full=True)
+        self._respawn_viruses(force_full=True)
         self._sync_prev_cell_positions()
         return self.get_observations()
 
@@ -139,6 +183,14 @@ class AgarioWorld:
         self.next_pellet_id += 1
         return self.next_pellet_id
 
+    def _new_virus_id(self) -> int:
+        self.next_virus_id += 1
+        return self.next_virus_id
+
+    def _new_ejected_id(self) -> int:
+        self.next_ejected_id += 1
+        return self.next_ejected_id
+
     def step(
         self,
         actions: dict[str, np.ndarray],
@@ -148,6 +200,10 @@ class AgarioWorld:
         """Advance one simulation tick."""
         self._capture_prev_cell_positions()
         self.step_count += 1
+        self.step_split_attempts = defaultdict(int)
+        self.step_successful_splits = defaultdict(int)
+        self.step_unsafe_splits = defaultdict(int)
+        self.step_useful_splits = defaultdict(int)
         dt_scale = max(0.01, float(dt) * float(self.config.simulation.physics_hz))
 
         for agent_id in self.agent_ids:
@@ -161,12 +217,22 @@ class AgarioWorld:
                 dt_scale=dt_scale,
             )
 
+        self._move_ejected_masses(dt_scale)
         self._consume_pellets()
+        self._consume_ejected_masses()
+        virus_splits = self._resolve_virus_interactions()
         elimination_pairs = self._resolve_cell_eating()
         self._merge_cells_if_ready()
+        self._apply_mass_decay(float(dt))
+        respawned_agents = self._respawn_eliminated_agents(elimination_pairs)
         self._respawn_pellets(force_full=False)
+        self._respawn_viruses(force_full=False)
 
-        rewards, dones, infos = self._compute_rewards_and_info(elimination_pairs)
+        rewards, dones, infos = self._compute_rewards_and_info(
+            elimination_pairs=elimination_pairs,
+            virus_splits=virus_splits,
+            respawned_agents=respawned_agents,
+        )
         observations = self.get_observations() if compute_observations else None
         return StepOutcome(observations=observations, rewards=rewards, dones=dones, infos=infos)
 
@@ -226,7 +292,14 @@ class AgarioWorld:
             return
 
         if split_enabled:
-            self._try_split(agent_id, direction)
+            self.step_split_attempts[agent_id] += 1
+            useful_split, unsafe_split = self._classify_split_context(agent_id, direction)
+            if self._try_split(agent_id, direction):
+                self.step_successful_splits[agent_id] += 1
+                if useful_split:
+                    self.step_useful_splits[agent_id] += 1
+                if unsafe_split:
+                    self.step_unsafe_splits[agent_id] += 1
 
         drag = float(np.clip(self.config.physics.drag, 0.0, 0.999))
         effective_drag = drag ** dt_scale
@@ -268,16 +341,16 @@ class AgarioWorld:
 
         cell.position = cell.position.astype(np.float32)
 
-    def _try_split(self, agent_id: str, direction: np.ndarray) -> None:
+    def _try_split(self, agent_id: str, direction: np.ndarray) -> bool:
         cells = self.agents[agent_id]
         if len(cells) >= self.config.physics.max_cells_per_agent:
-            return
+            return False
 
         largest = max(cells, key=lambda c: c.mass)
         if largest.mass < self.config.physics.min_split_mass:
-            return
+            return False
         if largest.split_cooldown > 0:
-            return
+            return False
 
         norm = float(np.sqrt(np.sum(direction * direction)))
         if norm <= 1e-6:
@@ -306,6 +379,50 @@ class AgarioWorld:
             eject_cooldown=0,
         )
         cells.append(new_cell)
+        return True
+
+    def _classify_split_context(self, agent_id: str, direction: np.ndarray) -> tuple[bool, bool]:
+        cells = self.agents.get(agent_id, [])
+        if not cells:
+            return False, False
+
+        largest = max(cells, key=lambda c: c.mass)
+        own_mass = max(self._agent_total_mass(agent_id), 1e-6)
+        split_range = max(
+            largest.radius(self.config.physics.radius_scale) * 4.8,
+            self.config.physics.split_boost * 10.0,
+        )
+        useful = False
+        unsafe = False
+        center = self._agent_center(agent_id)
+        norm = float(np.linalg.norm(direction))
+        aim = direction / norm if norm > 1e-6 else np.zeros((2,), dtype=np.float32)
+
+        for other_id in self.agent_ids:
+            if other_id == agent_id or not self.agents[other_id]:
+                continue
+            other_center = self._agent_center(other_id)
+            delta = other_center - center
+            distance = float(np.linalg.norm(delta))
+            other_mass = self._agent_total_mass(other_id)
+            ratio = other_mass / own_mass
+            if ratio >= 0.95 and distance <= self.map_size * 0.18:
+                unsafe = True
+            if ratio <= 0.58 and distance <= split_range:
+                if norm <= 1e-6:
+                    useful = True
+                else:
+                    target_norm = float(np.linalg.norm(delta))
+                    if target_norm <= 1e-6 or float(np.dot(aim, delta / target_norm)) >= 0.45:
+                        useful = True
+
+        if self.config.viruses.enabled and self.viruses and own_mass >= self.config.viruses.min_split_mass:
+            for virus in self.viruses:
+                distance = float(np.linalg.norm(virus.position - center))
+                if distance <= self.map_size * 0.10:
+                    unsafe = True
+                    break
+        return useful, unsafe
 
     def eject_mass(self, agent_id: str, direction: np.ndarray) -> None:
         """Optional mass ejection mechanic (disabled by default)."""
@@ -333,7 +450,158 @@ class AgarioWorld:
             position=np.clip(pellet_position, 0.0, self.map_size).astype(np.float32),
             mass=self.config.physics.eject_mass_amount,
         )
-        self.pellets.append(pellet)
+        ejected = EjectedMass(
+            ejected_id=self._new_ejected_id(),
+            owner_id=agent_id,
+            position=pellet.position.copy(),
+            velocity=(direction * self.config.physics.eject_speed).astype(np.float32),
+            mass=float(pellet.mass),
+        )
+        self.ejected_masses.append(ejected)
+
+    def _move_ejected_masses(self, dt_scale: float) -> None:
+        if not self.ejected_masses:
+            return
+        drag = float(np.clip(self.config.physics.drag, 0.0, 0.999))
+        effective_drag = drag ** max(1.0, dt_scale)
+        kept: list[EjectedMass] = []
+        for ejected in self.ejected_masses:
+            ejected.position = (ejected.position + ejected.velocity * dt_scale).astype(np.float32)
+            ejected.velocity = (ejected.velocity * effective_drag).astype(np.float32)
+            ejected.age_steps += 1
+            if ejected.age_steps > 240:
+                continue
+            if np.any(ejected.position < 0.0) or np.any(ejected.position > self.map_size):
+                continue
+            kept.append(ejected)
+        self.ejected_masses = kept
+
+    def _consume_ejected_masses(self) -> None:
+        if not self.ejected_masses:
+            return
+
+        consumed: set[int] = set()
+        if self.config.viruses.enabled and self.viruses:
+            for ejected in self.ejected_masses:
+                for virus in self.viruses:
+                    radius = virus.radius(self.config.physics.radius_scale)
+                    dist_sq = float(np.sum((ejected.position - virus.position) ** 2))
+                    if dist_sq > radius * radius:
+                        continue
+                    consumed.add(ejected.ejected_id)
+                    virus.mass += ejected.mass
+                    virus.fed_count += 1
+                    self._maybe_split_fed_virus(virus, ejected.velocity)
+                    break
+
+        cell_refs = [cell for cells in self.agents.values() for cell in cells]
+        if cell_refs:
+            for ejected in self.ejected_masses:
+                if ejected.ejected_id in consumed:
+                    continue
+                for cell in cell_refs:
+                    radius = cell.radius(self.config.physics.radius_scale)
+                    dist_sq = float(np.sum((ejected.position - cell.position) ** 2))
+                    if dist_sq > radius * radius:
+                        continue
+                    cell.mass += ejected.mass
+                    consumed.add(ejected.ejected_id)
+                    break
+
+        if consumed:
+            self.ejected_masses = [
+                ejected
+                for ejected in self.ejected_masses
+                if ejected.ejected_id not in consumed
+            ]
+
+    def _maybe_split_fed_virus(self, virus: Virus, feed_velocity: np.ndarray) -> None:
+        if virus.fed_count < self.config.viruses.feed_to_split:
+            return
+        if len(self.viruses) >= self.config.viruses.max_count:
+            virus.fed_count = 0
+            virus.mass = float(self.config.viruses.mass)
+            return
+
+        norm = float(np.linalg.norm(feed_velocity))
+        if norm <= 1e-6:
+            angle = self.rng.uniform(0.0, 2.0 * np.pi)
+            direction = np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
+        else:
+            direction = (feed_velocity / norm).astype(np.float32)
+        spawn_position = virus.position + direction * self.config.viruses.split_spawn_distance
+        spawn_position = np.clip(spawn_position, 0.0, self.map_size).astype(np.float32)
+        self.viruses.append(
+            Virus(
+                virus_id=self._new_virus_id(),
+                position=spawn_position,
+                mass=float(self.config.viruses.mass),
+            )
+        )
+        virus.fed_count = 0
+        virus.mass = float(self.config.viruses.mass)
+
+    def _resolve_virus_interactions(self) -> dict[str, int]:
+        if not self.config.viruses.enabled or not self.viruses:
+            return {}
+
+        consumed_viruses: set[int] = set()
+        splits_by_agent: dict[str, int] = defaultdict(int)
+        for virus in self.viruses:
+            if virus.virus_id in consumed_viruses:
+                continue
+            virus_radius = virus.radius(self.config.physics.radius_scale)
+            for agent_id, cells in self.agents.items():
+                for cell in list(cells):
+                    if cell.mass < self.config.viruses.min_split_mass:
+                        continue
+                    dist_sq = float(np.sum((cell.position - virus.position) ** 2))
+                    if dist_sq > max(virus_radius, cell.radius(self.config.physics.radius_scale)) ** 2:
+                        continue
+                    consumed_viruses.add(virus.virus_id)
+                    cell.mass += virus.mass * self.config.viruses.consumption_efficiency
+                    self._burst_cell_from_virus(agent_id, cell)
+                    splits_by_agent[agent_id] += 1
+                    break
+                if virus.virus_id in consumed_viruses:
+                    break
+
+        if consumed_viruses:
+            self.viruses = [
+                virus
+                for virus in self.viruses
+                if virus.virus_id not in consumed_viruses
+            ]
+        return dict(splits_by_agent)
+
+    def _burst_cell_from_virus(self, agent_id: str, cell: Cell) -> None:
+        cells = self.agents[agent_id]
+        available_slots = max(0, self.config.physics.max_cells_per_agent - len(cells))
+        pieces_to_add = min(max(0, self.config.viruses.split_pieces - 1), available_slots)
+        if pieces_to_add <= 0:
+            return
+
+        total_pieces = pieces_to_add + 1
+        piece_mass = max(1.0, cell.mass / total_pieces)
+        cell.mass = piece_mass
+        cell.merge_cooldown = self.config.physics.merge_cooldown_steps
+        cell.split_cooldown = self.config.physics.split_cooldown_steps
+
+        for piece_idx in range(pieces_to_add):
+            angle = (2.0 * np.pi * piece_idx / max(1, pieces_to_add)) + self.rng.uniform(-0.12, 0.12)
+            direction = np.array([np.cos(angle), np.sin(angle)], dtype=np.float32)
+            new_position = cell.position + direction * (cell.radius(self.config.physics.radius_scale) + 3.0)
+            cells.append(
+                Cell(
+                    cell_id=self._new_cell_id(),
+                    agent_id=agent_id,
+                    position=np.clip(new_position, 0.0, self.map_size).astype(np.float32),
+                    velocity=(direction * self.config.physics.split_boost).astype(np.float32),
+                    mass=piece_mass,
+                    split_cooldown=self.config.physics.split_cooldown_steps,
+                    merge_cooldown=self.config.physics.merge_cooldown_steps,
+                )
+            )
 
     def _consume_pellets(self) -> None:
         if not self.pellets:
@@ -451,9 +719,76 @@ class AgarioWorld:
             )
             self.pellets.append(pellet)
 
+    def _respawn_viruses(self, force_full: bool) -> None:
+        if not self.config.viruses.enabled:
+            return
+        target = self.target_virus_count
+        if target <= 0:
+            return
+        to_add = max(0, target - len(self.viruses)) if force_full else min(1, max(0, target - len(self.viruses)))
+        for _ in range(to_add):
+            self.viruses.append(
+                Virus(
+                    virus_id=self._new_virus_id(),
+                    position=self._sample_open_position(
+                        margin=float(self.config.viruses.spawn_margin),
+                        min_dist=36.0,
+                    ),
+                    mass=float(self.config.viruses.mass),
+                )
+            )
+
+    def _sample_open_position(self, margin: float, min_dist: float) -> np.ndarray:
+        existing: list[np.ndarray] = []
+        for cells in self.agents.values():
+            existing.extend(cell.position for cell in cells)
+        existing.extend(pellet.position for pellet in self.pellets[:64])
+        existing.extend(virus.position for virus in self.viruses)
+        low = max(0.0, margin)
+        high = max(low + 1.0, self.map_size - margin)
+        for _ in range(200):
+            candidate = self.rng.uniform(low=low, high=high, size=(2,)).astype(np.float32)
+            if all(float(np.sum((candidate - point) ** 2)) >= min_dist * min_dist for point in existing):
+                return candidate
+        return self.rng.uniform(0.0, self.map_size, size=(2,)).astype(np.float32)
+
+    def _apply_mass_decay(self, dt: float) -> None:
+        if not self.config.mass_decay.enabled or self.config.mass_decay.per_second <= 0.0:
+            return
+        decay = max(0.0, 1.0 - float(self.config.mass_decay.per_second) * max(0.0, dt))
+        min_mass = float(self.config.mass_decay.min_mass)
+        for cells in self.agents.values():
+            for cell in cells:
+                cell.mass = max(min_mass, cell.mass * decay)
+
+    def _respawn_eliminated_agents(self, elimination_pairs: list[tuple[str, str]]) -> set[str]:
+        if not self.config.simulation.continuing_respawn:
+            return set()
+        victims = {victim for _, victim in elimination_pairs}
+        respawned: set[str] = set()
+        for agent_id in victims:
+            if self.agents.get(agent_id):
+                continue
+            self.agents[agent_id] = [
+                Cell(
+                    cell_id=self._new_cell_id(),
+                    agent_id=agent_id,
+                    position=self._sample_open_position(margin=20.0, min_dist=48.0),
+                    velocity=np.zeros(2, dtype=np.float32),
+                    mass=float(self.config.simulation.respawn_mass),
+                )
+            ]
+            self.snapshots[agent_id].respawns += 1
+            respawned.add(agent_id)
+        if respawned:
+            self._sync_prev_cell_positions()
+        return respawned
+
     def _compute_rewards_and_info(
         self,
         elimination_pairs: list[tuple[str, str]],
+        virus_splits: dict[str, int],
+        respawned_agents: set[str],
     ) -> tuple[dict[str, float], dict[str, bool], dict[str, dict[str, Any]]]:
         elimination_by_agent: dict[str, int] = defaultdict(int)
         eliminated_agents: set[str] = set()
@@ -465,7 +800,10 @@ class AgarioWorld:
         infos: dict[str, dict[str, Any]] = {}
 
         alive_count = len(self.alive_agents)
-        global_done = self.step_count >= self.config.max_steps or alive_count <= 1
+        if self.config.simulation.continuing_respawn:
+            global_done = self.step_count >= self.config.max_steps
+        else:
+            global_done = self.step_count >= self.config.max_steps or alive_count <= 1
         time_frac = self.step_count / max(1, self.config.max_steps)
 
         winner: str | None = None
@@ -481,6 +819,7 @@ class AgarioWorld:
             prev_mass = self.snapshots[agent_id].total_mass
             delta_mass = total_mass - prev_mass
 
+            behavior_breakdown = self._compute_behavior_reward_breakdown(agent_id)
             reward = (
                 self.config.rewards.mass_gain_scale * delta_mass
                 + self.config.rewards.time_penalty
@@ -488,14 +827,44 @@ class AgarioWorld:
             )
             if agent_id in eliminated_agents:
                 reward += self.config.rewards.death_penalty
+                reward += self.config.reward_terms.respawn_penalty
             if alive and time_frac >= self.config.rewards.survival_bonus_start_frac:
                 reward += self.config.rewards.survival_bonus
+            if virus_splits.get(agent_id, 0):
+                behavior_breakdown["virus_split"] = (
+                    virus_splits[agent_id] * self.config.reward_terms.virus_split_bonus
+                )
+            if self.step_split_attempts.get(agent_id, 0):
+                behavior_breakdown["split_attempt"] = (
+                    self.step_split_attempts[agent_id] * self.config.reward_terms.split_attempt_penalty
+                )
+            if self.step_unsafe_splits.get(agent_id, 0):
+                behavior_breakdown["unsafe_split"] = (
+                    self.step_unsafe_splits[agent_id] * self.config.reward_terms.unsafe_split_penalty
+                )
+            if self.step_useful_splits.get(agent_id, 0):
+                behavior_breakdown["useful_split"] = (
+                    self.step_useful_splits[agent_id] * self.config.reward_terms.useful_split_bonus
+                )
+            reward += sum(behavior_breakdown.values())
 
             rewards[agent_id] = float(reward)
             self.snapshots[agent_id].total_mass = total_mass
             self.snapshots[agent_id].alive = alive
             self.snapshots[agent_id].episode_return += reward
             self.snapshots[agent_id].eliminated_opponents += elimination_by_agent.get(agent_id, 0)
+            self.snapshots[agent_id].virus_splits += virus_splits.get(agent_id, 0)
+            self.snapshots[agent_id].split_attempts += self.step_split_attempts.get(agent_id, 0)
+            self.snapshots[agent_id].successful_splits += self.step_successful_splits.get(agent_id, 0)
+            self.snapshots[agent_id].unsafe_splits += self.step_unsafe_splits.get(agent_id, 0)
+            self.snapshots[agent_id].useful_splits += self.step_useful_splits.get(agent_id, 0)
+            self.snapshots[agent_id].last_reward_breakdown = {
+                "mass_gain": self.config.rewards.mass_gain_scale * delta_mass,
+                "time": self.config.rewards.time_penalty,
+                "elimination": elimination_by_agent.get(agent_id, 0) * self.config.rewards.elimination_bonus,
+                "death": self.config.rewards.death_penalty if agent_id in eliminated_agents else 0.0,
+                **behavior_breakdown,
+            }
 
             infos[agent_id] = {
                 "alive": alive,
@@ -503,13 +872,24 @@ class AgarioWorld:
                 "delta_mass": delta_mass,
                 "episode_return": self.snapshots[agent_id].episode_return,
                 "eliminations": self.snapshots[agent_id].eliminated_opponents,
+                "virus_splits": self.snapshots[agent_id].virus_splits,
+                "split_attempts": self.snapshots[agent_id].split_attempts,
+                "successful_splits": self.snapshots[agent_id].successful_splits,
+                "unsafe_splits": self.snapshots[agent_id].unsafe_splits,
+                "useful_splits": self.snapshots[agent_id].useful_splits,
+                "respawned": agent_id in respawned_agents,
+                "respawns": self.snapshots[agent_id].respawns,
+                "reward_breakdown": dict(self.snapshots[agent_id].last_reward_breakdown),
                 "recent_direction_counts": list(self.snapshots[agent_id].recent_direction_counts),
                 "winner": winner,
             }
 
         dones: dict[str, bool] = {}
         for agent_id in self.agent_ids:
-            agent_done = global_done or not self.snapshots[agent_id].alive
+            agent_done = global_done or (
+                (not self.config.simulation.continuing_respawn)
+                and not self.snapshots[agent_id].alive
+            )
             dones[agent_id] = agent_done
         dones["__all__"] = global_done
 
@@ -520,6 +900,7 @@ class AgarioWorld:
             "map_size": self.map_size,
             "winner": winner,
             "auto_curriculum": self.auto_curriculum,
+            "scenario": self.scenario_name,
         }
 
         if global_done:
@@ -593,6 +974,74 @@ class AgarioWorld:
         masses = np.array([cell.mass for cell in cells], dtype=np.float32)
         stacked = np.stack([cell.position for cell in cells], axis=0)
         return (stacked * masses[:, None]).sum(axis=0) / max(float(masses.sum()), 1e-6)
+
+    def _nearest_relation(
+        self,
+        agent_id: str,
+        *,
+        want_threat: bool,
+    ) -> tuple[str, np.ndarray, float, float] | None:
+        center = self._agent_center(agent_id)
+        own_mass = max(self._agent_total_mass(agent_id), 1e-6)
+        candidates: list[tuple[str, np.ndarray, float, float]] = []
+        for other_id in self.agent_ids:
+            if other_id == agent_id or not self.agents[other_id]:
+                continue
+            other_center = self._agent_center(other_id)
+            delta = other_center - center
+            distance = float(np.linalg.norm(delta))
+            ratio = self._agent_total_mass(other_id) / own_mass
+            if want_threat and ratio >= self.config.physics.eat_mass_ratio:
+                candidates.append((other_id, delta, distance, ratio))
+            elif (not want_threat) and ratio <= (1.0 / max(self.config.physics.eat_mass_ratio, 1e-6)):
+                candidates.append((other_id, delta, distance, ratio))
+        if not candidates:
+            return None
+        return min(candidates, key=lambda item: item[2])
+
+    def _compute_behavior_reward_breakdown(self, agent_id: str) -> dict[str, float]:
+        breakdown: dict[str, float] = {}
+        if not self.agents[agent_id]:
+            self.snapshots[agent_id].nearest_threat_distance = None
+            self.snapshots[agent_id].nearest_target_distance = None
+            return breakdown
+
+        threat = self._nearest_relation(agent_id, want_threat=True)
+        previous_threat = self.snapshots[agent_id].nearest_threat_distance
+        if threat is not None:
+            if previous_threat is not None and self.config.reward_terms.threat_escape_scale:
+                delta = max(0.0, threat[2] - previous_threat) / max(self.map_size, 1e-6)
+                breakdown["threat_escape"] = delta * self.config.reward_terms.threat_escape_scale
+            self.snapshots[agent_id].nearest_threat_distance = threat[2]
+        else:
+            self.snapshots[agent_id].nearest_threat_distance = None
+
+        target = self._nearest_relation(agent_id, want_threat=False)
+        previous_target = self.snapshots[agent_id].nearest_target_distance
+        if target is not None:
+            if previous_target is not None and self.config.reward_terms.target_pressure_scale:
+                delta = max(0.0, previous_target - target[2]) / max(self.map_size, 1e-6)
+                breakdown["target_pressure"] = delta * self.config.reward_terms.target_pressure_scale
+            self.snapshots[agent_id].nearest_target_distance = target[2]
+        else:
+            self.snapshots[agent_id].nearest_target_distance = None
+
+        center = self._agent_center(agent_id)
+        corner_margin = self.map_size * 0.18
+        in_corner = (
+            (center[0] <= corner_margin or center[0] >= self.map_size - corner_margin)
+            and (center[1] <= corner_margin or center[1] >= self.map_size - corner_margin)
+        )
+        if in_corner and self.config.reward_terms.corner_penalty:
+            breakdown["corner"] = self.config.reward_terms.corner_penalty
+
+        if self.config.reward_terms.survival_quality_scale:
+            distance_from_center = float(
+                np.linalg.norm(center - np.array([self.map_size * 0.5, self.map_size * 0.5], dtype=np.float32))
+            )
+            center_score = 1.0 - min(1.0, distance_from_center / max(self.map_size * 0.707, 1e-6))
+            breakdown["survival_quality"] = center_score * self.config.reward_terms.survival_quality_scale
+        return breakdown
 
     def _norm_mass(self, mass: float) -> float:
         return float(mass / 250.0)
@@ -730,4 +1179,79 @@ class AgarioWorld:
             ],
             dtype=np.float32,
         )
+        cursor += 4
+
+        if self.config.observation_features.enabled:
+            if self.config.observation_features.include_threats:
+                cursor = self._write_relation_observation(
+                    obs=obs,
+                    cursor=cursor,
+                    agent_id=agent_id,
+                    center=center,
+                    want_threat=True,
+                )
+                cursor = self._write_relation_observation(
+                    obs=obs,
+                    cursor=cursor,
+                    agent_id=agent_id,
+                    center=center,
+                    want_threat=False,
+                )
+            if self.config.observation_features.include_viruses:
+                cursor = self._write_virus_observation(obs=obs, cursor=cursor, center=center)
+            if self.config.observation_features.include_eject_state:
+                largest = self._agent_largest_cell(agent_id)
+                split_ready = 0.0
+                eject_ready = 0.0
+                if largest is not None:
+                    split_ready = float(
+                        largest.mass >= self.config.physics.min_split_mass
+                        and largest.split_cooldown <= 0
+                    )
+                    eject_ready = float(
+                        self.config.physics.enable_eject_mechanic
+                        and largest.eject_cooldown <= 0
+                        and largest.mass > self.config.physics.eject_mass_amount + 1.0
+                    )
+                obs[cursor : cursor + 2] = np.array([split_ready, eject_ready], dtype=np.float32)
         return obs
+
+    def _write_relation_observation(
+        self,
+        *,
+        obs: np.ndarray,
+        cursor: int,
+        agent_id: str,
+        center: np.ndarray,
+        want_threat: bool,
+    ) -> int:
+        relation = self._nearest_relation(agent_id, want_threat=want_threat)
+        if relation is None:
+            return cursor + 4
+        _, delta, distance, mass_ratio = relation
+        obs[cursor : cursor + 4] = np.array(
+            [
+                delta[0] / max(self.map_size, 1e-6),
+                delta[1] / max(self.map_size, 1e-6),
+                distance / max(self.map_size, 1e-6),
+                mass_ratio,
+            ],
+            dtype=np.float32,
+        )
+        return cursor + 4
+
+    def _write_virus_observation(self, *, obs: np.ndarray, cursor: int, center: np.ndarray) -> int:
+        if not self.viruses:
+            return cursor + 3
+        nearest = min(self.viruses, key=lambda virus: float(np.sum((virus.position - center) ** 2)))
+        delta = nearest.position - center
+        distance = float(np.linalg.norm(delta))
+        obs[cursor : cursor + 3] = np.array(
+            [
+                delta[0] / max(self.map_size, 1e-6),
+                delta[1] / max(self.map_size, 1e-6),
+                distance / max(self.map_size, 1e-6),
+            ],
+            dtype=np.float32,
+        )
+        return cursor + 3

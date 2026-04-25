@@ -47,6 +47,50 @@ class PelletFrame:
 
 
 @dataclass(frozen=True, slots=True)
+class VirusFrame:
+    """World-space virus snapshot for one render frame."""
+
+    position: tuple[float, float]
+    mass: float
+    fed_count: int
+
+
+@dataclass(frozen=True, slots=True)
+class EjectedMassFrame:
+    """World-space ejected mass snapshot for one render frame."""
+
+    position: tuple[float, float]
+    mass: float
+    owner_id: str
+
+
+@dataclass(frozen=True, slots=True)
+class AgentIntentFrame:
+    """Last policy intent for an agent."""
+
+    agent_id: str
+    direction: tuple[float, float]
+    split_requested: bool
+
+
+@dataclass(frozen=True, slots=True)
+class RewardBreakdownFrame:
+    """Latest reward components for an agent."""
+
+    agent_id: str
+    components: tuple[tuple[str, float], ...]
+
+
+@dataclass(frozen=True, slots=True)
+class ScenarioFrame:
+    """Active scenario/curriculum metadata for the cockpit."""
+
+    name: str
+    stage: int
+    preset: str
+
+
+@dataclass(frozen=True, slots=True)
 class AgentCardFrame:
     """Per-agent observer card."""
 
@@ -110,6 +154,8 @@ class WorldFrame:
     focus_agent_id: str | None
     cells: tuple[WorldCellFrame, ...]
     pellets: tuple[PelletFrame, ...]
+    viruses: tuple[VirusFrame, ...] = ()
+    ejected_masses: tuple[EjectedMassFrame, ...] = ()
 
 
 @dataclass(frozen=True, slots=True)
@@ -129,3 +175,6 @@ class RenderFrame:
     show_help: bool
     help_rows: tuple[str, ...]
     interpolation_alpha: float
+    agent_intents: tuple[AgentIntentFrame, ...] = ()
+    reward_breakdowns: tuple[RewardBreakdownFrame, ...] = ()
+    scenario: ScenarioFrame | None = None

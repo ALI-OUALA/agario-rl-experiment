@@ -7,12 +7,17 @@ from typing import Any
 from agario_rl import AgarioConfig
 from agario_rl.rendering.models import (
     AgentCardFrame,
+    AgentIntentFrame,
     ChartFrame,
     ControlButtonFrame,
+    EjectedMassFrame,
     MetricCardFrame,
     PelletFrame,
+    RewardBreakdownFrame,
     RenderFrame,
+    ScenarioFrame,
     StatusFrame,
+    VirusFrame,
     WorldCellFrame,
     WorldFrame,
 )
@@ -70,6 +75,7 @@ def build_render_frame(
     runtime_stats: RuntimeSessionStats,
     interpolation_alpha: float,
     focus_agent_index: int | None,
+    last_actions: dict[str, Any] | None = None,
 ) -> RenderFrame:
     """Convert runtime state into an immutable render payload."""
 
@@ -99,6 +105,22 @@ def build_render_frame(
         PelletFrame(position=(float(p.position[0]), float(p.position[1])), mass=float(p.mass))
         for p in world.pellets
     )
+    viruses = tuple(
+        VirusFrame(
+            position=(float(v.position[0]), float(v.position[1])),
+            mass=float(v.mass),
+            fed_count=int(getattr(v, "fed_count", 0)),
+        )
+        for v in getattr(world, "viruses", [])
+    )
+    ejected_masses = tuple(
+        EjectedMassFrame(
+            position=(float(e.position[0]), float(e.position[1])),
+            mass=float(e.mass),
+            owner_id=str(e.owner_id),
+        )
+        for e in getattr(world, "ejected_masses", [])
+    )
 
     world_frame = WorldFrame(
         map_size=float(world.map_size),
@@ -109,6 +131,8 @@ def build_render_frame(
         focus_agent_id=focus_agent_id,
         cells=tuple(cells),
         pellets=pellets,
+        viruses=viruses,
+        ejected_masses=ejected_masses,
     )
 
     session_cards = (
@@ -119,6 +143,7 @@ def build_render_frame(
         MetricCardFrame("Physics", f"{metrics.get('physics_steps_per_sec', 0.0):.1f}/s", (0, 157, 173)),
         MetricCardFrame("Queue", str(int(metrics.get("worker_queue", 0.0))), (236, 100, 75)),
         MetricCardFrame("Updates", str(int(metrics.get("update_count", 0.0))), (94, 148, 255)),
+        MetricCardFrame("Scenario", str(getattr(world, "scenario_name", "classic")), (0, 157, 173)),
     )
 
     training_cards = (
@@ -154,6 +179,38 @@ def build_render_frame(
         ChartFrame("Updates", runtime_stats.chart_series("update_count"), (157, 111, 193), _series_label(runtime_stats.chart_series("update_count"), "{:.0f}")),
     )
 
+    agent_intents: list[AgentIntentFrame] = []
+    if last_actions:
+        for agent_id, action in last_actions.items():
+            raw = list(action)
+            dx = float(raw[0]) if len(raw) >= 1 else 0.0
+            dy = float(raw[1]) if len(raw) >= 2 else 0.0
+            split_requested = bool(len(raw) >= 3 and float(raw[2]) >= 0.5)
+            agent_intents.append(
+                AgentIntentFrame(
+                    agent_id=agent_id,
+                    direction=(dx, dy),
+                    split_requested=split_requested,
+                )
+            )
+
+    reward_breakdowns = tuple(
+        RewardBreakdownFrame(
+            agent_id=agent_id,
+            components=tuple(
+                (str(key), float(value))
+                for key, value in infos.get(agent_id, {}).get("reward_breakdown", {}).items()
+            ),
+        )
+        for agent_id in world.agent_ids
+    )
+
+    scenario = ScenarioFrame(
+        name=str(getattr(world, "scenario_name", "classic")),
+        stage=int(getattr(world, "stage", 0)),
+        preset=str(config.scenario_curriculum.preset),
+    )
+
     controls = (
         ControlButtonFrame("toggle_pause", "Pause" if not controller.paused else "Resume", controller.paused),
         ControlButtonFrame("step_physics", "Step Tick"),
@@ -187,4 +244,7 @@ def build_render_frame(
         show_help=controller.show_help,
         help_rows=HELP_ROWS,
         interpolation_alpha=float(interpolation_alpha),
+        agent_intents=tuple(agent_intents),
+        reward_breakdowns=reward_breakdowns,
+        scenario=scenario,
     )

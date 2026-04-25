@@ -124,8 +124,8 @@ The technical changes were straightforward but important.
 
 - `scripts/train.py` now resumes from saved checkpoints and keeps global update
   numbering intact.
-- `scripts/supervise.py` now writes interactive updates into the same canonical
-  metrics CSV as headless training.
+- `scripts/showcase.py` now gives the project a no-save full-arena presentation
+  path separate from checkpoint-writing training.
 - `scripts/play.py` now uses a fairer human-vs-bots setup without the old
   human-only eject shortcut.
 - `scripts/train_human_ready.py` trains a fresh learner against the frozen

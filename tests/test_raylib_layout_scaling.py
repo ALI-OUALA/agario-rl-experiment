@@ -165,7 +165,17 @@ def test_panel_width_grows_with_window_size() -> None:
     minimal_width = renderer._panel_width_for_window(3200.0, "minimal")
 
     assert expanded_width > compact_width
-    assert minimal_width < expanded_width
+    assert minimal_width == 0.0
+
+
+def test_minimal_layout_uses_full_window_arena() -> None:
+    renderer = _renderer_stub()
+
+    world_rect, panel_rect, _panel_scale, _world_scale = renderer._layout("minimal")
+
+    assert world_rect == UiRect(0.0, 0.0, 1920.0, 1080.0)
+    assert panel_rect.width == 0.0
+    assert renderer.side_panel == 0
 
 
 def test_panel_scale_grows_with_available_panel_size() -> None:
@@ -225,6 +235,18 @@ def test_camera_reset_shortcut_returns_to_follow_mode() -> None:
     renderer._handle_camera_input(frame, world_rect)
 
     assert renderer.camera_follow_enabled is True
+
+
+def test_visible_world_bounds_cover_current_viewport() -> None:
+    renderer = _renderer_stub()
+    renderer.zoom = 2.0
+    renderer.camera_pos = [500.0, 600.0]
+
+    bounds = renderer._visible_world_bounds(UiRect(0.0, 0.0, 800.0, 400.0), margin=0.0)
+
+    assert bounds == (300.0, 700.0, 500.0, 700.0)
+    assert renderer._position_in_bounds((500.0, 600.0), *bounds)
+    assert not renderer._position_in_bounds((100.0, 600.0), *bounds)
 
 
 def test_focus_command_reenables_follow_camera() -> None:

@@ -34,6 +34,65 @@ class PhysicsConfig:
     enable_eject_mechanic: bool = False
     eject_mass_amount: float = 2.0
     eject_cooldown_steps: int = 8
+    eject_speed: float = 8.0
+
+
+@dataclass(slots=True)
+class VirusConfig:
+    enabled: bool = False
+    initial_count: int = 0
+    mass: float = 100.0
+    min_split_mass: float = 90.0
+    feed_to_split: int = 7
+    max_count: int = 24
+    spawn_margin: float = 30.0
+    split_spawn_distance: float = 42.0
+    split_pieces: int = 4
+    consumption_efficiency: float = 0.0
+
+
+@dataclass(slots=True)
+class MassDecayConfig:
+    enabled: bool = False
+    per_second: float = 0.0
+    min_mass: float = 10.0
+
+
+@dataclass(slots=True)
+class ObservationFeaturesConfig:
+    enabled: bool = False
+    include_threats: bool = False
+    include_viruses: bool = False
+    include_eject_state: bool = False
+
+
+@dataclass(slots=True)
+class RewardTermsConfig:
+    threat_escape_scale: float = 0.0
+    target_pressure_scale: float = 0.0
+    corner_penalty: float = 0.0
+    survival_quality_scale: float = 0.0
+    virus_split_bonus: float = 0.0
+    respawn_penalty: float = 0.0
+    split_attempt_penalty: float = 0.0
+    unsafe_split_penalty: float = 0.0
+    useful_split_bonus: float = 0.0
+
+
+@dataclass(slots=True)
+class ScenarioCurriculumConfig:
+    enabled: bool = False
+    preset: str = "classic"
+    stage_names: list[str] = field(
+        default_factory=lambda: [
+            "pellet_growth",
+            "evasion",
+            "hunting",
+            "virus_control",
+            "mixed_arena",
+            "full_arena",
+        ]
+    )
 
 
 @dataclass(slots=True)
@@ -61,6 +120,8 @@ class RLConfig:
     max_grad_norm: float = 0.5
     imitation_buffer_capacity: int = 12000
     imitation_batch_size: int = 256
+    split_logit_bias: float = -0.75
+    unready_split_logit_penalty: float = 4.0
 
 
 @dataclass(slots=True)
@@ -101,6 +162,8 @@ class SimulationConfig:
     action_mode: str = "continuous"
     camera_smoothness: float = 0.18
     zoom_smoothness: float = 0.12
+    continuing_respawn: bool = False
+    respawn_mass: float = 25.0
 
 
 @dataclass(slots=True)
@@ -137,6 +200,15 @@ class AgarioConfig:
     nearest_opponents: int = 6
     map: MapConfig = field(default_factory=MapConfig)
     physics: PhysicsConfig = field(default_factory=PhysicsConfig)
+    viruses: VirusConfig = field(default_factory=VirusConfig)
+    mass_decay: MassDecayConfig = field(default_factory=MassDecayConfig)
+    observation_features: ObservationFeaturesConfig = field(
+        default_factory=ObservationFeaturesConfig
+    )
+    reward_terms: RewardTermsConfig = field(default_factory=RewardTermsConfig)
+    scenario_curriculum: ScenarioCurriculumConfig = field(
+        default_factory=ScenarioCurriculumConfig
+    )
     rewards: RewardConfig = field(default_factory=RewardConfig)
     rl: RLConfig = field(default_factory=RLConfig)
     curriculum: CurriculumConfig = field(default_factory=CurriculumConfig)
@@ -167,6 +239,11 @@ def _default_raw_config() -> dict[str, Any]:
         "nearest_opponents": 6,
         "map": asdict(MapConfig()),
         "physics": asdict(PhysicsConfig()),
+        "viruses": asdict(VirusConfig()),
+        "mass_decay": asdict(MassDecayConfig()),
+        "observation_features": asdict(ObservationFeaturesConfig()),
+        "reward_terms": asdict(RewardTermsConfig()),
+        "scenario_curriculum": asdict(ScenarioCurriculumConfig()),
         "rewards": asdict(RewardConfig()),
         "rl": asdict(RLConfig()),
         "curriculum": asdict(CurriculumConfig()),
@@ -195,6 +272,11 @@ def load_config(path: str | Path) -> AgarioConfig:
         nearest_opponents=int(raw["nearest_opponents"]),
         map=MapConfig(**raw["map"]),
         physics=PhysicsConfig(**raw["physics"]),
+        viruses=VirusConfig(**raw["viruses"]),
+        mass_decay=MassDecayConfig(**raw["mass_decay"]),
+        observation_features=ObservationFeaturesConfig(**raw["observation_features"]),
+        reward_terms=RewardTermsConfig(**raw["reward_terms"]),
+        scenario_curriculum=ScenarioCurriculumConfig(**raw["scenario_curriculum"]),
         rewards=RewardConfig(**raw["rewards"]),
         rl=RLConfig(**raw["rl"]),
         curriculum=CurriculumConfig(**raw["curriculum"]),
@@ -206,17 +288,67 @@ def load_config(path: str | Path) -> AgarioConfig:
     )
 
 
+def apply_scenario_preset(config: AgarioConfig, preset: str) -> AgarioConfig:
+    """Apply a named scenario preset while preserving the public env API."""
+    preset_name = str(preset or "classic")
+    config.scenario_curriculum.preset = preset_name
+    if preset_name == "classic":
+        return config
+    if preset_name not in {"agario_curriculum", "full_arena"}:
+        raise ValueError(f"Unknown scenario preset: {preset_name}")
+
+    config.viruses.enabled = True
+    config.viruses.initial_count = max(config.viruses.initial_count, 6)
+    config.mass_decay.enabled = True
+    config.mass_decay.per_second = max(config.mass_decay.per_second, 0.002)
+    config.observation_features.enabled = True
+    config.observation_features.include_threats = True
+    config.observation_features.include_viruses = True
+    config.observation_features.include_eject_state = True
+    config.reward_terms.threat_escape_scale = max(config.reward_terms.threat_escape_scale, 0.08)
+    config.reward_terms.target_pressure_scale = max(config.reward_terms.target_pressure_scale, 0.05)
+    config.reward_terms.corner_penalty = min(config.reward_terms.corner_penalty, -0.015)
+    config.reward_terms.survival_quality_scale = max(config.reward_terms.survival_quality_scale, 0.003)
+    config.reward_terms.virus_split_bonus = max(config.reward_terms.virus_split_bonus, 0.6)
+    config.reward_terms.respawn_penalty = min(config.reward_terms.respawn_penalty, -1.0)
+    config.reward_terms.split_attempt_penalty = min(config.reward_terms.split_attempt_penalty, -0.015)
+    config.reward_terms.unsafe_split_penalty = min(config.reward_terms.unsafe_split_penalty, -0.35)
+    config.reward_terms.useful_split_bonus = max(config.reward_terms.useful_split_bonus, 0.12)
+    config.scenario_curriculum.enabled = preset_name == "agario_curriculum"
+    if preset_name == "full_arena":
+        config.num_agents = max(config.num_agents, 6)
+        config.max_steps = max(config.max_steps, 3600)
+        config.nearest_pellets = max(config.nearest_pellets, 12)
+        config.nearest_opponents = max(config.nearest_opponents, 5)
+        config.map.start_size = max(config.map.start_size, 2000)
+        config.map.max_size = max(config.map.max_size, 2000)
+        config.map.pellets_per_10k_area = 2
+        config.map.pellet_respawn_per_step = 5
+        config.viruses.initial_count = max(config.viruses.initial_count, 18)
+        config.viruses.max_count = max(config.viruses.max_count, 36)
+        config.physics.enable_eject_mechanic = True
+        config.physics.max_cells_per_agent = max(config.physics.max_cells_per_agent, 8)
+        config.simulation.continuing_respawn = True
+    return config
+
+
 __all__ = [
     "AgarioConfig",
+    "apply_scenario_preset",
     "AsyncTrainingConfig",
     "CurriculumConfig",
     "LoggingConfig",
     "MapConfig",
+    "MassDecayConfig",
+    "ObservationFeaturesConfig",
     "PhysicsConfig",
     "RLConfig",
     "RenderConfig",
     "RewardConfig",
+    "RewardTermsConfig",
+    "ScenarioCurriculumConfig",
     "SimulationConfig",
     "SupervisorConfig",
+    "VirusConfig",
     "load_config",
 ]

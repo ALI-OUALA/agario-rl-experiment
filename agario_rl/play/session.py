@@ -4,14 +4,15 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from pathlib import Path
+import random
 from typing import Any
 
 import numpy as np
 
 from agario_rl import AgarioConfig
 from agario_rl.env.gym_env import AgarioMultiAgentEnv
+from agario_rl.opponents import OpponentPolicy, assign_opponents, build_default_opponent_pool
 from agario_rl.play.input import HumanControlInput, PlayerCommand, build_player_command
-from agario_rl.rl.ppo_shared import SharedPPOTrainer
 
 
 @dataclass(slots=True)
@@ -36,6 +37,8 @@ class HumanVsBotsSession:
         player_index: int = 0,
         seed: int | None = None,
         enable_eject: bool = False,
+        opponent_pool: list[OpponentPolicy] | None = None,
+        deterministic_opponents: bool = False,
     ) -> None:
         if config.simulation.action_mode != "continuous":
             raise ValueError("Human play mode requires continuous action mode.")
@@ -43,28 +46,48 @@ class HumanVsBotsSession:
         self.config = config
         self.player_index = int(player_index)
         self.seed = config.seed if seed is None else int(seed)
+        self.rng = random.Random(self.seed)
+        self.deterministic_opponents = bool(deterministic_opponents)
         self.env = AgarioMultiAgentEnv(config=config, enable_render=False)
         if not 0 <= self.player_index < len(self.env.agent_ids):
             raise ValueError(f"player_index must be in range [0, {len(self.env.agent_ids) - 1}]")
 
         self.player_agent_id = self.env.agent_ids[self.player_index]
         self.config.physics.enable_eject_mechanic = bool(enable_eject)
-        self.trainer = SharedPPOTrainer(config=config, observation_dim=self.env.observation_space["shape"][0])
-
         checkpoint = Path(checkpoint_path)
-        if not self.trainer.load(checkpoint):
-            raise FileNotFoundError(f"Playable mode checkpoint not found: {checkpoint}")
+        self.opponent_pool = (
+            list(opponent_pool)
+            if opponent_pool is not None
+            else build_default_opponent_pool(config=config, checkpoint_path=checkpoint)
+        )
+        self.opponent_agent_ids = [
+            agent_id for agent_id in self.env.agent_ids if agent_id != self.player_agent_id
+        ]
+        self.active_opponents = assign_opponents(
+            self.opponent_pool,
+            self.opponent_agent_ids,
+            self.rng,
+            deterministic=self.deterministic_opponents,
+        )
 
-        self.current_obs = self.trainer.force_sync_with_env(self.env, seed=self.seed)
+        self.current_obs = self.env.reset(seed=self.seed)
         self.last_actions: dict[str, np.ndarray] = {
             agent_id: np.zeros((3,), dtype=np.float32)
             for agent_id in self.env.agent_ids
         }
+        self.physics_dt = 1.0 / max(1, int(config.simulation.physics_hz))
+        self.substeps = max(1, int(round(config.simulation.physics_hz / config.simulation.decision_hz)))
 
     def reset(self, seed: int | None = None) -> dict[str, np.ndarray]:
         """Reset the session and return the new observation dict."""
         next_seed = self.seed if seed is None else int(seed)
-        self.current_obs = self.trainer.force_sync_with_env(self.env, seed=next_seed)
+        self.current_obs = self.env.reset(seed=next_seed)
+        self.active_opponents = assign_opponents(
+            self.opponent_pool,
+            self.opponent_agent_ids,
+            self.rng,
+            deterministic=self.deterministic_opponents,
+        )
         self.last_actions = {
             agent_id: np.zeros((3,), dtype=np.float32)
             for agent_id in self.env.agent_ids
@@ -76,14 +99,35 @@ class HumanVsBotsSession:
         if self.current_obs is None:
             raise RuntimeError("Session must be reset before stepping.")
 
-        actions = self.trainer.predict_actions(self.current_obs, deterministic=True)
         player_command = build_player_command(control)
+        actions = {
+            agent_id: policy.action(
+                world=self.env.world,
+                observations=self.current_obs,
+                agent_id=agent_id,
+            )
+            for agent_id, policy in self.active_opponents.items()
+        }
         actions[self.player_agent_id] = player_command.action
 
         if self.config.physics.enable_eject_mechanic and player_command.eject_requested:
             self.env.world.eject_mass(self.player_agent_id, player_command.action[:2])
 
-        observations, rewards, dones, infos = self.env.step(actions)
+        accumulated_rewards = {agent_id: 0.0 for agent_id in self.env.agent_ids}
+        observations: dict[str, np.ndarray] | None = self.current_obs
+        dones: dict[str, bool] = {"__all__": False}
+        infos: dict[str, dict[str, Any]] = {}
+        for _ in range(self.substeps):
+            observations, rewards, dones, infos = self.env.step(
+                actions,
+                dt=self.physics_dt,
+                compute_observations=True,
+            )
+            for agent_id in self.env.agent_ids:
+                accumulated_rewards[agent_id] += float(rewards.get(agent_id, 0.0))
+            if dones.get("__all__", False):
+                break
+
         self.current_obs = observations
         self.last_actions = {
             agent_id: np.asarray(action, dtype=np.float32).copy()
@@ -91,7 +135,7 @@ class HumanVsBotsSession:
         }
         return PlayStepResult(
             observations=observations,
-            rewards=rewards,
+            rewards=accumulated_rewards,
             dones=dones,
             infos=infos,
             actions=self.last_actions,

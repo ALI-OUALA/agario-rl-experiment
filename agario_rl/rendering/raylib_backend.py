@@ -140,7 +140,10 @@ class RaylibRenderer:
         pr.clear_background(self._color(245, 249, 252))
         self._update_camera(frame, world_rect)
         self._draw_world(frame, world_rect, world_scale)
-        self._draw_side_panel(frame, panel_rect, panel_scale)
+        if frame.overlay_mode == "full" and panel_rect.width > 0.0:
+            self._draw_side_panel(frame, panel_rect, panel_scale)
+        else:
+            self._draw_training_overlay(frame, world_rect, world_scale)
         self._draw_status_banner(frame, world_rect, world_scale)
         pr.end_drawing()
 
@@ -202,6 +205,11 @@ class RaylibRenderer:
         self._sync_window_state(force=True)
 
     def _layout(self, overlay_mode: str) -> tuple[UiRect, UiRect, float, float]:
+        if overlay_mode != "full":
+            world_rect = UiRect(0.0, 0.0, float(self.width), float(self.height))
+            panel_rect = UiRect(float(self.width), 0.0, 0.0, float(self.height))
+            self.side_panel = 0
+            return world_rect, panel_rect, self._PANEL_SCALE_MIN, self._world_scale(world_rect)
         panel_width = self._panel_width_for_window(float(self.width), overlay_mode)
         self.side_panel = int(panel_width)
         world_rect = UiRect(0.0, 0.0, float(self.width - panel_width), float(self.height))
@@ -209,9 +217,11 @@ class RaylibRenderer:
         return world_rect, panel_rect, self._panel_scale(panel_rect), self._world_scale(world_rect)
 
     def _panel_width_for_window(self, window_width: float, overlay_mode: str) -> float:
+        if overlay_mode != "full":
+            return 0.0
         base_ratio = float(np.clip(self.base_side_panel / max(self.base_width, 1), 0.26, 0.38))
-        mode_factor = 1.0 if overlay_mode == "full" else 0.86
-        min_width = 420.0 if overlay_mode == "full" else 360.0
+        mode_factor = 1.0
+        min_width = 420.0
         max_width = min(window_width * 0.48, window_width - self._MIN_WORLD_WIDTH)
         preferred = window_width * base_ratio * mode_factor
         return float(np.clip(preferred, min_width, max(min_width, max_width)))
@@ -288,6 +298,20 @@ class RaylibRenderer:
             mass = 25.0
 
         target_world_span = float(np.clip(180.0 + np.sqrt(max(mass, 1.0)) * 22.0, 180.0, frame.world.map_size))
+        if focus_cells:
+            opponent_positions = np.array(
+                [
+                    cell.position
+                    for cell in frame.world.cells
+                    if cell.agent_id != frame.world.focus_agent_id
+                ],
+                dtype=np.float32,
+            )
+            if opponent_positions.size:
+                deltas = opponent_positions - center[None, :]
+                nearest_opponent_distance = float(np.sqrt(np.min(np.sum(deltas * deltas, axis=1))))
+                target_world_span = max(target_world_span, nearest_opponent_distance * 2.35)
+                target_world_span = float(np.clip(target_world_span, 180.0, frame.world.map_size))
         target_zoom = min(world_rect.width, world_rect.height) / max(target_world_span, 1.0)
         target_zoom = float(np.clip(target_zoom, 0.25, 4.0))
 
@@ -318,16 +342,35 @@ class RaylibRenderer:
 
     def _draw_world(self, frame: RenderFrame, world_rect: UiRect, scale: float) -> None:
         pr = self.pr
+        min_x, max_x, min_y, max_y = self._visible_world_bounds(world_rect, margin=80.0)
         pr.draw_rectangle_rec(self._rect(world_rect), self._color(236, 247, 250))
         if frame.show_grid:
             self._draw_grid(frame, world_rect)
         for pellet in frame.world.pellets:
+            if not self._position_in_bounds(pellet.position, min_x, max_x, min_y, max_y):
+                continue
             px, py = self._world_to_screen(pellet.position, world_rect)
             pr.draw_circle(int(px), int(py), 2.0, self._color(129, 219, 111))
+        for ejected in frame.world.ejected_masses:
+            if not self._position_in_bounds(ejected.position, min_x, max_x, min_y, max_y):
+                continue
+            ex, ey = self._world_to_screen(ejected.position, world_rect)
+            pr.draw_circle(int(ex), int(ey), max(2.5, 3.2 * self.zoom), self._color(83, 158, 227))
+        for virus in frame.world.viruses:
+            if not self._position_in_bounds(virus.position, min_x, max_x, min_y, max_y):
+                continue
+            vx, vy = self._world_to_screen(virus.position, world_rect)
+            radius = max(10.0, np.sqrt(max(virus.mass, 1.0)) * self.config.physics.radius_scale * self.zoom)
+            pr.draw_circle(int(vx), int(vy), radius, self._color(96, 205, 116, 205))
+            pr.draw_circle_lines(int(vx), int(vy), radius + 2.0, self._color(35, 116, 62))
+            if virus.fed_count:
+                pr.draw_text(str(virus.fed_count), int(vx - 4), int(vy - 8), self._font(16, scale), self._color(24, 82, 44))
 
         for cell in frame.world.cells:
             ix = cell.previous_position[0] + (cell.position[0] - cell.previous_position[0]) * frame.interpolation_alpha
             iy = cell.previous_position[1] + (cell.position[1] - cell.previous_position[1]) * frame.interpolation_alpha
+            if not self._position_in_bounds((ix, iy), min_x, max_x, min_y, max_y):
+                continue
             sx, sy = self._world_to_screen((ix, iy), world_rect)
             radius = max(3.0, cell.radius * self.zoom)
             color = self._agent_color(cell.agent_id)
@@ -335,26 +378,150 @@ class RaylibRenderer:
             pr.draw_circle_lines(int(sx), int(sy), radius, self._color(255, 255, 255))
             if cell.is_focus:
                 pr.draw_circle_lines(int(sx), int(sy), radius + 5.0, self._color(255, 255, 255, 120))
+            if self.config.render.show_agent_labels:
+                label = f"{cell.agent_id.replace('agent_', 'A')} {cell.mass:.0f}"
+                self._draw_text(label, sx - radius * 0.55, sy - self._font(13, scale) * 0.5, self._font(13, scale), self._color(30, 47, 62))
 
-        chip_padding = 16.0 * scale
-        chip_height = 42.0 * scale
-        chip_width = 220.0 * scale
-        chip = UiRect(
-            world_rect.x + chip_padding,
-            world_rect.bottom - (chip_padding + chip_height),
-            chip_width,
-            chip_height,
+        self._draw_offscreen_agent_indicators(frame, world_rect, scale)
+        self._draw_agent_intents(frame, world_rect, scale)
+        self._draw_world_leaderboard(frame, world_rect, scale)
+        self._draw_minimap(frame, world_rect, scale)
+
+        if self.config.render.show_score_chip:
+            chip_padding = 16.0 * scale
+            chip_height = 42.0 * scale
+            chip_width = 330.0 * scale
+            chip = UiRect(
+                world_rect.x + chip_padding,
+                world_rect.bottom - (chip_padding + chip_height),
+                chip_width,
+                chip_height,
+            )
+            focus_name = (frame.world.focus_agent_id or "none").replace("agent_", "A")
+            focus_mass = 0.0
+            for agent in frame.agent_cards:
+                if agent.agent_id == frame.world.focus_agent_id:
+                    focus_mass = agent.total_mass
+                    break
+            camera_mode = "follow" if self.camera_follow_enabled else "free"
+            scenario = frame.scenario.name if frame.scenario is not None else "classic"
+            self._draw_panel_box(chip, self._color(255, 255, 255, 220), self._color(203, 218, 232))
+            self._draw_text(
+                f"Score: {int(focus_mass * 2)} | {focus_name} | {camera_mode} | {scenario}",
+                chip.x + 12.0 * scale,
+                chip.y + 11.0 * scale,
+                self._font(16, scale),
+                self._color(38, 62, 86),
+            )
+
+    def _draw_world_leaderboard(self, frame: RenderFrame, world_rect: UiRect, scale: float) -> None:
+        if not frame.agent_cards:
+            return
+        width = min(230.0 * scale, world_rect.width * 0.32)
+        row_height = 22.0 * scale
+        rows = min(6, len(frame.agent_cards))
+        height = 38.0 * scale + rows * row_height
+        rect = UiRect(world_rect.right - width - 16.0 * scale, world_rect.y + 16.0 * scale, width, height)
+        self._draw_panel_box(rect, self._color(255, 255, 255, 205), self._color(205, 219, 232))
+        self._draw_text("Leaderboard", rect.x + 12.0 * scale, rect.y + 10.0 * scale, self._font(17, scale), self._color(38, 62, 86))
+        ranked = sorted(frame.agent_cards, key=lambda card: card.total_mass, reverse=True)
+        for idx, agent in enumerate(ranked[:rows]):
+            color = self._color(*agent.color)
+            y = rect.y + 34.0 * scale + idx * row_height
+            name = agent.agent_id.replace("agent_", "A")
+            state = "" if agent.alive else " out"
+            self.pr.draw_circle(int(rect.x + 15.0 * scale), int(y + 8.0 * scale), 5.0 * scale, color)
+            self._draw_text(
+                f"{idx + 1}. {name} {agent.total_mass:.0f}{state}",
+                rect.x + 27.0 * scale,
+                y,
+                self._font(14, scale),
+                self._color(48, 68, 92),
+            )
+
+    def _draw_minimap(self, frame: RenderFrame, world_rect: UiRect, scale: float) -> None:
+        size = min(148.0 * scale, world_rect.width * 0.2, world_rect.height * 0.22)
+        if size < 72.0:
+            return
+        margin = 16.0 * scale
+        rect = UiRect(world_rect.right - size - margin, world_rect.bottom - size - margin, size, size)
+        self._draw_panel_box(rect, self._color(255, 255, 255, 190), self._color(190, 206, 220))
+        map_size = max(frame.world.map_size, 1.0)
+        for cell in frame.world.cells:
+            x = rect.x + (cell.position[0] / map_size) * rect.width
+            y = rect.y + (cell.position[1] / map_size) * rect.height
+            radius = 5.0 * scale if cell.is_focus else 4.0 * scale
+            self.pr.draw_circle(int(x), int(y), radius, self._agent_color(cell.agent_id))
+        half_w = world_rect.width * 0.5 / max(self.zoom, 1e-6)
+        half_h = world_rect.height * 0.5 / max(self.zoom, 1e-6)
+        view = UiRect(
+            rect.x + ((float(self.camera_pos[0]) - half_w) / map_size) * rect.width,
+            rect.y + ((float(self.camera_pos[1]) - half_h) / map_size) * rect.height,
+            (half_w * 2.0 / map_size) * rect.width,
+            (half_h * 2.0 / map_size) * rect.height,
         )
-        focus_name = frame.world.focus_agent_id or "none"
-        camera_mode = "follow" if self.camera_follow_enabled else "free"
-        self._draw_panel_box(chip, self._color(255, 255, 255, 220), self._color(203, 218, 232))
-        self._draw_text(
-            f"Camera: {camera_mode} | target {focus_name}",
-            chip.x + 12.0 * scale,
-            chip.y + 11.0 * scale,
-            self._font(16, scale),
-            self._color(38, 62, 86),
+        clipped = UiRect(
+            max(rect.x, view.x),
+            max(rect.y, view.y),
+            max(1.0, min(rect.right, view.right) - max(rect.x, view.x)),
+            max(1.0, min(rect.bottom, view.bottom) - max(rect.y, view.y)),
         )
+        self.pr.draw_rectangle_lines_ex(self._rect(clipped), 1.5, self._color(38, 62, 86, 180))
+
+    def _draw_offscreen_agent_indicators(self, frame: RenderFrame, world_rect: UiRect, scale: float) -> None:
+        if not frame.world.focus_agent_id:
+            return
+        grouped: dict[str, list[tuple[float, float]]] = {}
+        for cell in frame.world.cells:
+            if cell.agent_id == frame.world.focus_agent_id:
+                continue
+            grouped.setdefault(cell.agent_id, []).append(cell.position)
+        for agent_id, positions in grouped.items():
+            center = np.mean(np.array(positions, dtype=np.float32), axis=0)
+            sx, sy = self._world_to_screen((float(center[0]), float(center[1])), world_rect)
+            padding = 20.0 * scale
+            visible = (
+                world_rect.x + padding <= sx <= world_rect.right - padding
+                and world_rect.y + padding <= sy <= world_rect.bottom - padding
+            )
+            if visible:
+                continue
+            cx = float(np.clip(sx, world_rect.x + padding, world_rect.right - padding))
+            cy = float(np.clip(sy, world_rect.y + padding, world_rect.bottom - padding))
+            color = self._agent_color(agent_id)
+            self.pr.draw_circle(int(cx), int(cy), 11.0 * scale, self._color(255, 255, 255, 205))
+            self.pr.draw_circle(int(cx), int(cy), 7.0 * scale, color)
+            self._draw_text(
+                agent_id.replace("agent_", "A"),
+                cx + 10.0 * scale,
+                cy - 8.0 * scale,
+                self._font(13, scale),
+                self._color(38, 62, 86),
+            )
+
+    def _draw_agent_intents(self, frame: RenderFrame, world_rect: UiRect, scale: float) -> None:
+        if not frame.agent_intents:
+            return
+        pr = self.pr
+        for intent in frame.agent_intents:
+            cells = [cell for cell in frame.world.cells if cell.agent_id == intent.agent_id]
+            if not cells:
+                continue
+            masses = np.array([max(cell.mass, 1.0) for cell in cells], dtype=np.float32)
+            positions = np.array([cell.position for cell in cells], dtype=np.float32)
+            center = (positions * masses[:, None]).sum(axis=0) / max(float(masses.sum()), 1e-6)
+            direction = np.array(intent.direction, dtype=np.float32)
+            norm = float(np.linalg.norm(direction))
+            if norm <= 1e-6:
+                continue
+            direction = direction / norm
+            start = self._world_to_screen((float(center[0]), float(center[1])), world_rect)
+            end_world = center + direction * (36.0 / max(self.zoom, 1e-6))
+            end = self._world_to_screen((float(end_world[0]), float(end_world[1])), world_rect)
+            color = self._agent_color(intent.agent_id)
+            pr.draw_line_ex(pr.Vector2(start[0], start[1]), pr.Vector2(end[0], end[1]), 3.0 * scale, color)
+            if intent.split_requested:
+                pr.draw_circle_lines(int(end[0]), int(end[1]), 8.0 * scale, self._color(244, 96, 78))
 
     def _draw_grid(self, frame: RenderFrame, world_rect: UiRect) -> None:
         pr = self.pr
@@ -412,9 +579,14 @@ class RaylibRenderer:
         y += section_gap
         y = self._draw_metric_grid(panel_rect.x + inset, y, width, frame.training_cards, cols=2, scale=scale)
         y += section_gap
+        if frame.scenario is not None:
+            y = self._draw_scenario_strip(panel_rect.x + inset, y, width, frame, scale)
+            y += section_gap
         y = self._draw_controls(panel_rect.x + inset, y, width, frame, scale)
         y += section_gap
         y = self._draw_agent_cards(panel_rect.x + inset, y, width, frame, scale)
+        y += section_gap
+        y = self._draw_reward_breakdowns(panel_rect.x + inset, y, width, frame, scale)
         y += section_gap
         y = self._draw_charts(panel_rect.x + inset, y, width, panel_rect.bottom - y - inset, frame, scale)
         if frame.show_help:
@@ -422,6 +594,8 @@ class RaylibRenderer:
             self._draw_help_overlay(panel_rect.x + inset, help_y, width, frame, scale)
 
     def _draw_status_banner(self, frame: RenderFrame, world_rect: UiRect, scale: float) -> None:
+        if frame.overlay_mode != "full":
+            return
         status = frame.status
         accent = {
             "info": self._color(42, 88, 130),
@@ -445,6 +619,33 @@ class RaylibRenderer:
             self._font(18, scale),
             self._color(40, 60, 82),
         )
+
+    def _draw_training_overlay(self, frame: RenderFrame, world_rect: UiRect, scale: float) -> None:
+        metrics = list(frame.session_cards[:4]) + list(frame.training_cards[:2])
+        if not metrics:
+            return
+        inset = 16.0 * scale
+        chip_h = 34.0 * scale
+        x = world_rect.x + inset
+        y = world_rect.y + inset
+        scenario = frame.scenario.name if frame.scenario is not None else "classic"
+        status_text = f"{scenario} | {frame.status.message}"
+        status_w = min(520.0 * scale, world_rect.width - inset * 2.0)
+        self._draw_panel_box(
+            UiRect(x, y, status_w, chip_h),
+            self._color(255, 255, 255, 215),
+            self._color(205, 219, 232),
+        )
+        self._draw_text(status_text, x + 12.0 * scale, y + 9.0 * scale, self._font(14, scale), self._color(38, 62, 86))
+        y += chip_h + 8.0 * scale
+        for card in metrics:
+            label = f"{card.title}: {card.value}"
+            width = min(max(118.0 * scale, 8.2 * len(label) * scale), 210.0 * scale)
+            rect = UiRect(x, y, width, chip_h)
+            self._draw_panel_box(rect, self._color(255, 255, 255, 205), self._color(*card.accent, 200))
+            self.pr.draw_rectangle_rec(self._rect(UiRect(rect.x, rect.y, 5.0 * scale, rect.height)), self._color(*card.accent))
+            self._draw_text(label, rect.x + 12.0 * scale, rect.y + 9.0 * scale, self._font(14, scale), self._color(38, 62, 86))
+            y += chip_h + 7.0 * scale
 
     def _draw_metric_grid(self, x: float, y: float, width: float, cards: tuple[Any, ...], cols: int, scale: float) -> float:
         gap = 10.0 * scale
@@ -483,6 +684,14 @@ class RaylibRenderer:
         rows = (len(frame.controls) + cols - 1) // cols
         return y + rows * (button_height + gap)
 
+    def _draw_scenario_strip(self, x: float, y: float, width: float, frame: RenderFrame, scale: float) -> float:
+        assert frame.scenario is not None
+        rect = UiRect(x, y, width, 42.0 * scale)
+        self._draw_panel_box(rect, self._color(236, 247, 250), self._color(176, 211, 221))
+        text = f"Scenario: {frame.scenario.name} | stage {frame.scenario.stage} | preset {frame.scenario.preset}"
+        self._draw_text(text, rect.x + 12.0 * scale, rect.y + 12.0 * scale, self._font(16, scale), self._color(35, 64, 82))
+        return rect.bottom
+
     def _draw_agent_cards(self, x: float, y: float, width: float, frame: RenderFrame, scale: float) -> float:
         self._draw_text("Agent Observer Cards", x, y - 24.0 * scale, self._font(20, scale), self._color(35, 60, 85))
         card_height = 84.0 * scale
@@ -511,6 +720,26 @@ class RaylibRenderer:
                 self._color(77, 99, 120),
             )
         return y + len(frame.agent_cards) * (card_height + gap)
+
+    def _draw_reward_breakdowns(self, x: float, y: float, width: float, frame: RenderFrame, scale: float) -> float:
+        if not frame.reward_breakdowns:
+            return y
+        self._draw_text("Reward Breakdown", x, y - 24.0 * scale, self._font(20, scale), self._color(35, 60, 85))
+        row_height = 28.0 * scale
+        max_rows = min(3, len(frame.reward_breakdowns))
+        rect = UiRect(x, y, width, max(42.0 * scale, row_height * max_rows + 12.0 * scale))
+        self._draw_panel_box(rect, self._color(255, 255, 255, 230), self._color(220, 230, 238))
+        for idx, breakdown in enumerate(frame.reward_breakdowns[:max_rows]):
+            components = sorted(breakdown.components, key=lambda item: abs(item[1]), reverse=True)[:3]
+            label = ", ".join(f"{name}:{value:+.2f}" for name, value in components) if components else "idle"
+            self._draw_text(
+                f"{breakdown.agent_id}: {label}",
+                rect.x + 12.0 * scale,
+                rect.y + 10.0 * scale + idx * row_height,
+                self._font(14, scale),
+                self._color(62, 82, 104),
+            )
+        return rect.bottom
 
     def _draw_charts(self, x: float, y: float, width: float, height: float, frame: RenderFrame, scale: float) -> float:
         self._draw_text("Live Telemetry", x, y - 24.0 * scale, self._font(20, scale), self._color(35, 60, 85))
@@ -567,6 +796,27 @@ class RaylibRenderer:
         sx = (position[0] - float(self.camera_pos[0])) * self.zoom + world_rect.width * 0.5 + world_rect.x
         sy = (position[1] - float(self.camera_pos[1])) * self.zoom + world_rect.height * 0.5 + world_rect.y
         return sx, sy
+
+    def _visible_world_bounds(self, world_rect: UiRect, margin: float = 0.0) -> tuple[float, float, float, float]:
+        half_w = world_rect.width * 0.5 / max(self.zoom, 1e-6)
+        half_h = world_rect.height * 0.5 / max(self.zoom, 1e-6)
+        margin_world = float(margin) / max(self.zoom, 1e-6)
+        return (
+            float(self.camera_pos[0]) - half_w - margin_world,
+            float(self.camera_pos[0]) + half_w + margin_world,
+            float(self.camera_pos[1]) - half_h - margin_world,
+            float(self.camera_pos[1]) + half_h + margin_world,
+        )
+
+    @staticmethod
+    def _position_in_bounds(
+        position: tuple[float, float],
+        min_x: float,
+        max_x: float,
+        min_y: float,
+        max_y: float,
+    ) -> bool:
+        return min_x <= float(position[0]) <= max_x and min_y <= float(position[1]) <= max_y
 
     def _draw_panel_box(self, rect: UiRect, fill: Any, border: Any, highlight: bool = False) -> None:
         self.pr.draw_rectangle_rounded(self._rect(rect), 0.18, 10, fill)

@@ -1,41 +1,111 @@
 # Quickstart
 
-This page gets you from a fresh checkout to a running experiment as quickly as
-possible. It covers install, fresh training, resumed training, mixed-opponent
-training, supervision, play mode, and evaluation, then points you to the
-deeper docs.
+This page is optimized for copy-paste use on Windows. It gives you the
+shortest path to install the project, run the main workflows, and test the
+current checkpoints.
 
-## Install the project
+## Copy-paste setup
 
-Start in the project root and create a virtual environment.
+Run these commands from the project root.
 
-```bash
+### Create and activate the venv
+
+```powershell
 python -m venv .venv
-.venv\Scripts\activate
-pip install -e .[dev]
 ```
 
-The interactive runtime and play mode depend on the `raylib` Python package.
-The project imports it through `pyray`.
-
-If you want to test Intel Arc acceleration, install the XPU wheels in the same
-venv:
-
-```bash
-.venv\Scripts\python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
-.venv\Scripts\python -c "import torch; print(torch.xpu.is_available())"
+```powershell
+.\.venv\Scripts\Activate.ps1
 ```
 
-## Run the main workflows
+### Install the project
 
-Use these commands to cover the most common experiment flows.
+```powershell
+python -m pip install -e .[dev]
+```
+
+### Optional: install Intel Arc XPU wheels
+
+Run this only if you want to test Intel Arc acceleration.
+
+```powershell
+python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
+```
+
+### Optional: verify Intel Arc detection
+
+```powershell
+python -c "import torch; print(torch.xpu.is_available())"
+```
+
+## Most common commands
+
+If you only want the main commands in one place, use this section.
+
+### Train from scratch
+
+```powershell
+python scripts/train.py --updates 10 --device auto
+```
+
+### Train with the scenario curriculum
+
+```powershell
+python scripts/train.py --updates 10 --scenario-preset agario_curriculum --continuing-respawn --device auto
+```
+
+### Resume the main checkpoint to a target update
+
+```powershell
+python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt --device auto
+```
+
+### Run a no-save showcase demo
+
+```powershell
+python scripts/showcase.py
+```
+
+### Play against the current agents
+
+```powershell
+python scripts/play.py --checkpoint checkpoints/latest.pt
+```
+
+### Evaluate the current checkpoint
+
+```powershell
+python scripts/eval.py --checkpoint checkpoints/latest.pt --episodes 5 --deterministic --device auto
+```
+
+### Train the mixed-opponent human-ready run
+
+```powershell
+python scripts/train_human_ready.py --updates 80 --device auto
+```
+
+### Resume the mixed-opponent human-ready run
+
+```powershell
+python scripts/train_human_ready.py --resume --updates 160 --checkpoint checkpoints/human_ready_v1/latest.pt --checkpoint-dir checkpoints/human_ready_v1 --metrics-csv logs/human_ready_v1_train_metrics.csv --opponent-checkpoint checkpoints/checkpoint_00500.pt --device cpu --inference-device cpu
+```
+
+### Evaluate human-readiness
+
+```powershell
+python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20 --device auto
+```
+
+## Workflow guide
+
+Use this section when you want a little context with the commands.
 
 ### Train quickly
 
 Run a short headless training pass when you want a new sequence that starts at
 update `1`.
 
-```bash
+```powershell
 python scripts/train.py --updates 10 --device auto
 ```
 
@@ -45,33 +115,70 @@ This command writes:
 - `checkpoints/checkpoint_*.pt`
 - `checkpoints/latest.pt`
 
+### Train with the large full-arena preset
+
+```powershell
+python scripts/train.py --updates 10 --scenario-preset full_arena --device auto
+```
+
+The `full_arena` preset uses a larger Agar.io-style map, more agents, more
+pellets, viruses, mass decay, ejected mass, continuing respawn, and the richer
+observation and reward terms. It is the default presentation target for
+showcase and play modes.
+
+### Train with the scenario curriculum
+
+Run the scenario preset when you want the richer Agar.io-style environment.
+
+```powershell
+python scripts/train.py --updates 10 --scenario-preset agario_curriculum --continuing-respawn --device auto
+```
+
+This path keeps the existing `env.reset()` and `env.step(actions)` contract,
+but it activates viruses, ejected mass, mass decay, continuing respawn, richer
+observation features, and extra reward terms. It writes the same files as
+classic training:
+
+- `logs/train_metrics.csv`
+- `checkpoints/checkpoint_*.pt`
+- `checkpoints/latest.pt`
+
+Use `--scenario-preset classic` or omit the flag when you want the baseline
+environment.
+
 ### Resume a saved checkpoint
 
 Run resume mode when you want to continue a checkpoint to a target milestone
 without resetting the update counter.
 
-```bash
+```powershell
 python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt --device auto
 ```
 
-### Open the observer cockpit
+### Run a no-save showcase
 
-Run the public interactive runtime when you want live controls and charts.
+Run this when you want a visitor-friendly example without writing checkpoints
+or metric logs.
 
-```bash
-python scripts/supervise.py --load-checkpoint
+```powershell
+python scripts/showcase.py
 ```
 
-The side panel shows session cards, training cards, agent cards, and live
-charts. The control surface lets you pause, step, change speed, toggle
-training, save or load checkpoints, and change camera focus without leaving
-the main window.
+The showcase defaults to the large full-arena preset and the
+`checkpoints/human_ready_v1/latest.pt` checkpoint. If the checkpoint is missing
+or incompatible, it still runs with the scripted opponent pool.
+
+For CI or a quick local smoke test:
+
+```powershell
+python scripts/showcase.py --headless --seconds 5 --checkpoint checkpoints/missing_showcase.pt
+```
 
 ### Play against the current agents
 
 Run the dedicated play mode when you want to test the trained bots directly.
 
-```bash
+```powershell
 python scripts/play.py --checkpoint checkpoints/latest.pt
 ```
 
@@ -89,8 +196,8 @@ extra option.
 
 Run a short deterministic evaluation against the latest checkpoint.
 
-```bash
-python scripts/eval.py --episodes 5 --deterministic --device auto
+```powershell
+python scripts/eval.py --checkpoint checkpoints/latest.pt --episodes 5 --deterministic --device auto
 ```
 
 ### Train against the mixed opponent pool
@@ -98,8 +205,15 @@ python scripts/eval.py --episodes 5 --deterministic --device auto
 Run the human-readiness training loop when you want a fresh learner to face
 something stronger than mirror self-play.
 
-```bash
+```powershell
 python scripts/train_human_ready.py --updates 80 --device auto
+```
+
+If you want to continue the current `human_ready_v1` checkpoint instead of
+starting over, use:
+
+```powershell
+python scripts/train_human_ready.py --resume --updates 160 --checkpoint checkpoints/human_ready_v1/latest.pt --checkpoint-dir checkpoints/human_ready_v1 --metrics-csv logs/human_ready_v1_train_metrics.csv --opponent-checkpoint checkpoints/checkpoint_00500.pt --device cpu --inference-device cpu
 ```
 
 ### Evaluate human-readiness proxies
@@ -107,8 +221,8 @@ python scripts/train_human_ready.py --updates 80 --device auto
 Run the proxy evaluator when you want metrics that reflect the kinds of
 mistakes a human punishes, such as corner camping and bad threat response.
 
-```bash
-python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20
+```powershell
+python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20 --device auto
 ```
 
 ### Benchmark CPU versus Intel Arc
@@ -116,8 +230,11 @@ python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/l
 Run the training benchmark before deciding whether `xpu` helps on your
 machine.
 
-```bash
+```powershell
 python scripts/benchmark_perf.py --mode train --updates 2 --device cpu
+```
+
+```powershell
 python scripts/benchmark_perf.py --mode train --updates 2 --device xpu
 ```
 
@@ -128,8 +245,11 @@ because this project is still heavily rollout-bound.
 
 Run the benchmark script when you want a quick performance check.
 
-```bash
+```powershell
 python scripts/benchmark_perf.py --mode step --steps 400
+```
+
+```powershell
 python scripts/benchmark_perf.py --mode render --frames 180 --overlay full
 ```
 

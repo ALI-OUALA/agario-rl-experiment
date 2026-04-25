@@ -26,6 +26,52 @@ physics:
   enable_eject_mechanic: false
   eject_mass_amount: 2.0
   eject_cooldown_steps: 8
+  eject_speed: 8.0
+
+viruses:
+  enabled: false
+  initial_count: 0
+  mass: 100.0
+  min_split_mass: 90.0
+  feed_to_split: 7
+  max_count: 24
+  spawn_margin: 30.0
+  split_spawn_distance: 42.0
+  split_pieces: 4
+  consumption_efficiency: 0.0
+
+mass_decay:
+  enabled: false
+  per_second: 0.0
+  min_mass: 10.0
+
+observation_features:
+  enabled: false
+  include_threats: false
+  include_viruses: false
+  include_eject_state: false
+
+reward_terms:
+  threat_escape_scale: 0.0
+  target_pressure_scale: 0.0
+  corner_penalty: 0.0
+  survival_quality_scale: 0.0
+  virus_split_bonus: 0.0
+  respawn_penalty: 0.0
+  split_attempt_penalty: 0.0
+  unsafe_split_penalty: 0.0
+  useful_split_bonus: 0.0
+
+scenario_curriculum:
+  enabled: false
+  preset: classic
+  stage_names:
+    - pellet_growth
+    - evasion
+    - hunting
+    - virus_control
+    - mixed_arena
+    - full_arena
 
 rewards:
   mass_gain_scale: 0.06
@@ -49,6 +95,8 @@ rl:
   max_grad_norm: 0.5
   imitation_buffer_capacity: 12000
   imitation_batch_size: 256
+  split_logit_bias: -0.75
+  unready_split_logit_penalty: 4.0
 
 curriculum:
   enabled: true
@@ -73,8 +121,8 @@ render:
   grid_line_width: 2
   hud_refresh_hz: 15
   cache_grid_surface: true
-  show_agent_labels: false
-  show_score_chip: false
+  show_agent_labels: true
+  show_score_chip: true
 
 simulation:
   physics_hz: 90
@@ -83,6 +131,8 @@ simulation:
   action_mode: continuous
   camera_smoothness: 0.18
   zoom_smoothness: 0.12
+  continuing_respawn: false
+  respawn_mass: 25.0
 
 async_training:
   enabled: true

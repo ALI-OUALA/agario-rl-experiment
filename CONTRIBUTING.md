@@ -24,8 +24,12 @@ Keep these rules in mind while you work:
   semantics, or render snapshots
 - update `README.md` and the pages in `docs/` when you change controls,
   telemetry, or config semantics
+- update `AGENTS.md` when you change the project map, safe commands, protected
+  artifacts, or the first files future agents must inspect
 - prefer semantic supervisor commands over renderer-specific input plumbing
 - keep rendering isolated from RL logic by building immutable frame snapshots
+- keep logs, checkpoints, and generated report assets out of routine code
+  changes unless the task explicitly asks for a fresh experiment run
 
 ## Run checks before opening a PR
 
@@ -40,11 +44,13 @@ important regressions faster:
 
 ```bash
 python -m pytest -q ^
+  tests/test_simulator_upgrade.py ^
+  tests/test_scenario_training_smoke.py ^
   tests/test_controller_ui_toggles.py ^
   tests/test_render_frame_snapshot.py ^
+  tests/test_render_ui_flags.py ^
   tests/test_render_backend_factory.py ^
   tests/test_render_backend_integration.py ^
-  tests/test_render_backend_compat.py ^
   tests/test_supervisor_runtime_stats.py
 ```
 
@@ -61,7 +67,15 @@ If a change affects the cockpit, call out:
 
 - new or removed controls
 - telemetry changes
+- scenario preset or render-detail changes
 - compatibility behavior for old backend names
+
+If a change affects the simulator upgrade, call out:
+
+- new config defaults
+- observation shape changes
+- reward breakdown changes
+- checkpoint compatibility expectations
 
 ## Reporting issues
 

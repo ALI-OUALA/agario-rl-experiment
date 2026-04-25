@@ -4,6 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass, field
 from pathlib import Path
+import random
 from typing import Protocol
 
 import numpy as np
@@ -26,6 +27,37 @@ class OpponentPolicy(Protocol):
         agent_id: str,
     ) -> np.ndarray:
         """Return one action for the given agent."""
+
+
+def observation_dim_from_config(config: AgarioConfig) -> int:
+    """Return the environment observation size produced by the world config."""
+    return AgarioWorld(config=config, seed=config.seed).observation_dim
+
+
+def assign_opponents(
+    pool: list[OpponentPolicy],
+    opponent_agent_ids: list[str],
+    rng: random.Random,
+    *,
+    deterministic: bool = False,
+) -> dict[str, OpponentPolicy]:
+    """Assign opponent policies, cycling when slots exceed the pool size."""
+    if not opponent_agent_ids:
+        return {}
+    if not pool:
+        raise ValueError("Opponent pool must contain at least one policy.")
+
+    if deterministic:
+        policies = [pool[index % len(pool)] for index in range(len(opponent_agent_ids))]
+    elif len(opponent_agent_ids) <= len(pool):
+        policies = rng.sample(pool, k=len(opponent_agent_ids))
+    else:
+        policies = [rng.choice(pool) for _ in opponent_agent_ids]
+
+    return {
+        agent_id: policy
+        for agent_id, policy in zip(opponent_agent_ids, policies, strict=True)
+    }
 
 
 def _agent_center(world: AgarioWorld, agent_id: str) -> np.ndarray:
@@ -56,6 +88,21 @@ def _nearest_pellet_direction(world: AgarioWorld, agent_id: str) -> np.ndarray:
     center = _agent_center(world, agent_id)
     target = min(world.pellets, key=lambda pellet: float(np.sum((pellet.position - center) ** 2)))
     return target.position - center
+
+
+def _nearby_virus_avoidance(world: AgarioWorld, agent_id: str) -> np.ndarray:
+    if not world.viruses:
+        return np.zeros((2,), dtype=np.float32)
+    center = _agent_center(world, agent_id)
+    own_mass = _agent_mass(world, agent_id)
+    avoidance = np.zeros((2,), dtype=np.float32)
+    for virus in world.viruses:
+        delta = center - virus.position
+        distance = max(float(np.linalg.norm(delta)), 1e-6)
+        dangerous = own_mass >= world.config.viruses.min_split_mass
+        if dangerous and distance < world.map_size * 0.12:
+            avoidance += (delta / distance).astype(np.float32) * (1.0 - distance / max(world.map_size * 0.12, 1e-6))
+    return avoidance
 
 
 def _nearest_opponents(
@@ -146,6 +193,42 @@ class OpportunisticHunterPolicy:
 
 
 @dataclass(slots=True)
+class AgarObjectivePolicy:
+    """Balanced bot for human-facing matches: survive, grow, then pressure."""
+
+    name: str = "agar_objective"
+
+    def action(
+        self,
+        *,
+        world: AgarioWorld,
+        observations: dict[str, np.ndarray],
+        agent_id: str,
+    ) -> np.ndarray:
+        center = _agent_center(world, agent_id)
+        opponents = _nearest_opponents(world, agent_id)
+        own_mass = _agent_mass(world, agent_id)
+        larger = [item for item in opponents if item[3] >= 1.12]
+        smaller = [item for item in opponents if item[3] <= 0.82]
+        map_center = np.array([world.map_size * 0.5, world.map_size * 0.5], dtype=np.float32)
+        center_bias = map_center - center
+        virus_avoidance = _nearby_virus_avoidance(world, agent_id)
+
+        if larger and larger[0][2] < world.map_size * 0.16:
+            flee = -larger[0][1] + 0.28 * center_bias + 0.85 * virus_avoidance
+            return _vector_action(flee)
+
+        if smaller:
+            target_id, chase_delta, distance, mass_ratio = smaller[0]
+            split_range = max(70.0, np.sqrt(max(own_mass, 1.0)) * world.config.physics.radius_scale * 4.8)
+            split = bool(mass_ratio <= 0.55 and distance <= split_range and not larger)
+            return _vector_action(chase_delta + 0.25 * virus_avoidance, split=split)
+
+        forage = _nearest_pellet_direction(world, agent_id)
+        return _vector_action(forage + 0.25 * center_bias + 0.65 * virus_avoidance)
+
+
+@dataclass(slots=True)
 class CheckpointPolicy:
     """Frozen checkpoint opponent used as a stronger self-play anchor."""
 
@@ -158,7 +241,7 @@ class CheckpointPolicy:
     def __post_init__(self) -> None:
         self.trainer = SharedPPOTrainer(
             config=self.config,
-            observation_dim=self.config.nearest_pellets * 3 + self.config.nearest_opponents * 4 + 12,
+            observation_dim=observation_dim_from_config(self.config),
             device=self.device,
         )
         if not self.trainer.load(self.checkpoint_path):
@@ -184,9 +267,14 @@ def build_default_opponent_pool(
     checkpoint_path: str | Path,
 ) -> list[OpponentPolicy]:
     """Build the default pool used for human-readiness training."""
-    return [
-        CheckpointPolicy(config=config, checkpoint_path=Path(checkpoint_path)),
+    pool: list[OpponentPolicy] = [
+        AgarObjectivePolicy(),
         PelletForagerPolicy(),
         ThreatAwareEvaderPolicy(),
         OpportunisticHunterPolicy(),
     ]
+    try:
+        pool.insert(0, CheckpointPolicy(config=config, checkpoint_path=Path(checkpoint_path)))
+    except (FileNotFoundError, RuntimeError, ValueError):
+        pass
+    return pool

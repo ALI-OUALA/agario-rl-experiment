@@ -1,0 +1,79 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>Agario RL Browser Lab</title>
+    <link rel="icon" href="data:image/svg+xml,%3Csvg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 64 64'%3E%3Ccircle cx='32' cy='32' r='28' fill='%2335c3ff'/%3E%3Ccircle cx='24' cy='24' r='8' fill='white'/%3E%3C/svg%3E" />
+  </head>
+  <body>
+    <div id="app">
+      <canvas id="game" aria-label="Agario RL arena"></canvas>
+
+      <header class="topbar">
+        <div>
+          <div class="eyebrow">Agario RL</div>
+          <h1>Browser Training Arena</h1>
+        </div>
+        <div class="topbar-controls">
+          <label>
+            <span>Mode</span>
+            <select id="modeSelect" aria-label="Mode">
+              <option value="showcase">Showcase</option>
+              <option value="play">Play</option>
+              <option value="training-view">Training view</option>
+            </select>
+          </label>
+          <button id="resetButton" type="button" title="Reset arena">Reset</button>
+        </div>
+      </header>
+
+      <aside class="panel panel-left">
+        <section>
+          <div class="panel-title">Leaderboard</div>
+          <ol id="leaderboard" class="leaderboard"></ol>
+        </section>
+        <section>
+          <div class="panel-title">Training State</div>
+          <dl class="metrics">
+            <div><dt>Scenario</dt><dd id="scenario">-</dd></div>
+            <div><dt>Update</dt><dd id="updateCount">0</dd></div>
+            <div><dt>Policy</dt><dd id="policySource">-</dd></div>
+            <div><dt>Checkpoint</dt><dd id="checkpoint">-</dd></div>
+          </dl>
+        </section>
+      </aside>
+
+      <aside class="panel panel-right">
+        <section>
+          <div class="panel-title">Human Readiness</div>
+          <dl class="metrics">
+            <div><dt>Useful splits</dt><dd id="usefulSplits">0</dd></div>
+            <div><dt>Unsafe splits</dt><dd id="unsafeSplits">0</dd></div>
+            <div><dt>Split safety</dt><dd id="splitSafety">0</dd></div>
+            <div><dt>Leader mass</dt><dd id="leaderMass">0</dd></div>
+          </dl>
+        </section>
+        <section>
+          <div class="panel-title">Runtime</div>
+          <dl class="metrics">
+            <div><dt>FPS</dt><dd id="fps">0</dd></div>
+            <div><dt>Agents</dt><dd id="agentCount">0</dd></div>
+            <div><dt>Pellets</dt><dd id="pelletCount">0</dd></div>
+            <div><dt>Status</dt><dd id="status">Connecting</dd></div>
+          </dl>
+        </section>
+      </aside>
+
+      <div class="bottom-hud">
+        <canvas id="minimap" width="180" height="180" aria-label="Minimap"></canvas>
+        <div class="help">
+          <span>Mouse steer</span>
+          <span>Space split</span>
+          <span>R reset</span>
+        </div>
+      </div>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

@@ -1,4 +1,4 @@
-"""Background PPO worker coordinator for non-blocking supervisor UI."""
+"""Background PPO worker coordinator for non-blocking training updates."""
 
 from __future__ import annotations
 

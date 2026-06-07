@@ -1,0 +1,298 @@
+:root {
+  color: #12202b;
+  background: #071019;
+  font-family:
+    Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI",
+    sans-serif;
+  font-synthesis: none;
+  text-rendering: optimizeLegibility;
+}
+
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#app {
+  width: 100%;
+  height: 100%;
+  margin: 0;
+  overflow: hidden;
+}
+
+button,
+select {
+  font: inherit;
+}
+
+#game {
+  position: fixed;
+  inset: 0;
+  width: 100vw;
+  height: 100vh;
+  background: #f7fbf8;
+  cursor: crosshair;
+}
+
+.topbar,
+.panel,
+.bottom-hud {
+  position: fixed;
+  z-index: 2;
+}
+
+.topbar {
+  top: 16px;
+  left: 18px;
+  right: 18px;
+  display: flex;
+  align-items: flex-start;
+  justify-content: space-between;
+  gap: 16px;
+  pointer-events: none;
+}
+
+.eyebrow {
+  color: rgba(9, 17, 27, 0.62);
+  font-size: 12px;
+  font-weight: 800;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+h1 {
+  margin: 2px 0 0;
+  color: #0d1923;
+  font-size: 26px;
+  line-height: 1;
+  letter-spacing: 0;
+  text-shadow: 0 1px 0 rgba(255, 255, 255, 0.8);
+}
+
+.topbar-controls {
+  display: flex;
+  align-items: flex-end;
+  gap: 10px;
+  pointer-events: auto;
+}
+
+.topbar label {
+  display: grid;
+  gap: 4px;
+  color: rgba(10, 22, 32, 0.72);
+  font-size: 12px;
+  font-weight: 800;
+}
+
+select,
+button {
+  min-height: 36px;
+  border: 1px solid rgba(11, 23, 32, 0.18);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.92);
+  color: #111d28;
+  box-shadow: 0 8px 26px rgba(11, 25, 39, 0.1);
+}
+
+select {
+  min-width: 148px;
+  padding: 0 34px 0 12px;
+}
+
+button {
+  padding: 0 14px;
+  font-weight: 800;
+}
+
+.panel {
+  width: 282px;
+  max-width: calc(50vw - 24px);
+  border: 1px solid rgba(13, 28, 40, 0.12);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.84);
+  box-shadow: 0 16px 42px rgba(11, 24, 38, 0.13);
+  backdrop-filter: blur(14px);
+  pointer-events: none;
+}
+
+.panel-left {
+  left: 18px;
+  top: 88px;
+}
+
+.panel-right {
+  right: 18px;
+  top: 88px;
+}
+
+.panel section {
+  padding: 14px;
+  border-bottom: 1px solid rgba(11, 24, 35, 0.08);
+}
+
+.panel section:last-child {
+  border-bottom: 0;
+}
+
+.panel-title {
+  margin-bottom: 10px;
+  color: rgba(12, 23, 34, 0.72);
+  font-size: 12px;
+  font-weight: 900;
+  letter-spacing: 0;
+  text-transform: uppercase;
+}
+
+.leaderboard {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+  padding: 0;
+  list-style: none;
+}
+
+.leaderboard li,
+.metrics div {
+  display: flex;
+  min-height: 24px;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  color: #162633;
+  font-size: 13px;
+}
+
+.leaderboard span {
+  min-width: 0;
+  overflow: hidden;
+  color: var(--agent-color);
+  font-weight: 900;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.leaderboard strong,
+.metrics dd {
+  margin: 0;
+  color: #091722;
+  font-weight: 900;
+}
+
+.metrics {
+  display: grid;
+  gap: 7px;
+  margin: 0;
+}
+
+.metrics dt {
+  color: rgba(15, 30, 44, 0.64);
+  font-weight: 700;
+}
+
+.metrics dd {
+  max-width: 150px;
+  overflow: hidden;
+  text-align: right;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.bottom-hud {
+  left: 50%;
+  bottom: 18px;
+  display: flex;
+  align-items: flex-end;
+  gap: 12px;
+  transform: translateX(-50%);
+}
+
+#minimap {
+  width: 180px;
+  height: 180px;
+  border: 1px solid rgba(12, 28, 39, 0.18);
+  border-radius: 8px;
+  background: rgba(255, 255, 255, 0.82);
+  box-shadow: 0 16px 42px rgba(11, 24, 38, 0.16);
+}
+
+.help {
+  display: flex;
+  gap: 8px;
+  flex-wrap: wrap;
+  justify-content: flex-end;
+  max-width: 280px;
+}
+
+.help span {
+  min-height: 28px;
+  padding: 6px 9px;
+  border: 1px solid rgba(11, 23, 32, 0.14);
+  border-radius: 6px;
+  background: rgba(255, 255, 255, 0.86);
+  color: #182938;
+  font-size: 12px;
+  font-weight: 850;
+  box-shadow: 0 8px 26px rgba(11, 25, 39, 0.1);
+}
+
+@media (max-width: 860px) {
+  .topbar {
+    top: 10px;
+    left: 10px;
+    right: 10px;
+  }
+
+  h1 {
+    font-size: 20px;
+  }
+
+  .topbar-controls {
+    gap: 6px;
+  }
+
+  select {
+    min-width: 120px;
+  }
+
+  .panel {
+    width: calc(50vw - 15px);
+    max-width: none;
+  }
+
+  .panel-left {
+    left: 10px;
+    top: auto;
+    bottom: 10px;
+  }
+
+  .panel-right {
+    right: 10px;
+    top: auto;
+    bottom: 10px;
+  }
+
+  .panel section {
+    padding: 10px;
+  }
+
+  .panel section + section {
+    display: none;
+  }
+
+  .bottom-hud {
+    left: auto;
+    right: 10px;
+    bottom: 148px;
+    transform: none;
+  }
+
+  #minimap {
+    width: 118px;
+    height: 118px;
+  }
+
+  .help {
+    display: none;
+  }
+}

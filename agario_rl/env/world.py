@@ -935,7 +935,7 @@ class AgarioWorld:
         self.curriculum_scores.clear()
 
     def adjust_map_size(self, increase: bool) -> None:
-        """Manual map scaling from supervisor controls."""
+        """Manual map scaling used by debugging and scenario tools."""
         factor = float(self.config.curriculum.stage_scale)
         candidate = self.map_size * factor if increase else self.map_size / factor
         candidate = float(np.clip(candidate, self.config.map.start_size, self.config.map.max_size))

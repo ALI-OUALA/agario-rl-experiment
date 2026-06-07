@@ -134,27 +134,6 @@ class CurriculumConfig:
 
 
 @dataclass(slots=True)
-class RenderConfig:
-    enabled: bool = True
-    window_width: int = 1920
-    window_height: int = 1080
-    side_panel_width: int = 620
-    start_fullscreen: bool = False
-    window_resizable: bool = True
-    fps: int = 60
-    show_help_by_default: bool = True
-    theme: str = "agar_reference_hybrid"
-    overlay_mode_default: str = "minimal"
-    grid_enabled_default: bool = True
-    grid_spacing: int = 25
-    grid_line_width: int = 2
-    hud_refresh_hz: int = 15
-    cache_grid_surface: bool = True
-    show_agent_labels: bool = True
-    show_score_chip: bool = True
-
-
-@dataclass(slots=True)
 class SimulationConfig:
     physics_hz: int = 90
     decision_hz: int = 15
@@ -175,12 +154,8 @@ class AsyncTrainingConfig:
 
 
 @dataclass(slots=True)
-class SupervisorConfig:
-    min_speed_multiplier: float = 0.25
-    max_speed_multiplier: float = 16.0
-    speed_step: float = 0.25
-    checkpoint_path: str = "checkpoints/latest.pt"
-    auto_update_when_ready: bool = True
+class CheckpointConfig:
+    latest_path: str = "checkpoints/latest.pt"
 
 
 @dataclass(slots=True)
@@ -212,11 +187,10 @@ class AgarioConfig:
     rewards: RewardConfig = field(default_factory=RewardConfig)
     rl: RLConfig = field(default_factory=RLConfig)
     curriculum: CurriculumConfig = field(default_factory=CurriculumConfig)
-    render: RenderConfig = field(default_factory=RenderConfig)
     simulation: SimulationConfig = field(default_factory=SimulationConfig)
     async_training: AsyncTrainingConfig = field(
         default_factory=AsyncTrainingConfig)
-    supervisor: SupervisorConfig = field(default_factory=SupervisorConfig)
+    checkpoint: CheckpointConfig = field(default_factory=CheckpointConfig)
     logging: LoggingConfig = field(default_factory=LoggingConfig)
 
 
@@ -247,10 +221,9 @@ def _default_raw_config() -> dict[str, Any]:
         "rewards": asdict(RewardConfig()),
         "rl": asdict(RLConfig()),
         "curriculum": asdict(CurriculumConfig()),
-        "render": asdict(RenderConfig()),
         "simulation": asdict(SimulationConfig()),
         "async_training": asdict(AsyncTrainingConfig()),
-        "supervisor": asdict(SupervisorConfig()),
+        "checkpoint": asdict(CheckpointConfig()),
         "logging": asdict(LoggingConfig()),
     }
 
@@ -262,8 +235,6 @@ def load_config(path: str | Path) -> AgarioConfig:
         loaded = yaml.safe_load(handle) or {}
 
     raw = _merge_dicts(_default_raw_config(), loaded)
-    render_raw = dict(raw["render"])
-    render_raw.pop("backend", None)
     return AgarioConfig(
         seed=int(raw["seed"]),
         num_agents=int(raw["num_agents"]),
@@ -280,10 +251,9 @@ def load_config(path: str | Path) -> AgarioConfig:
         rewards=RewardConfig(**raw["rewards"]),
         rl=RLConfig(**raw["rl"]),
         curriculum=CurriculumConfig(**raw["curriculum"]),
-        render=RenderConfig(**render_raw),
         simulation=SimulationConfig(**raw["simulation"]),
         async_training=AsyncTrainingConfig(**raw["async_training"]),
-        supervisor=SupervisorConfig(**raw["supervisor"]),
+        checkpoint=CheckpointConfig(**raw["checkpoint"]),
         logging=LoggingConfig(**raw["logging"]),
     )
 
@@ -336,6 +306,7 @@ __all__ = [
     "AgarioConfig",
     "apply_scenario_preset",
     "AsyncTrainingConfig",
+    "CheckpointConfig",
     "CurriculumConfig",
     "LoggingConfig",
     "MapConfig",
@@ -343,12 +314,10 @@ __all__ = [
     "ObservationFeaturesConfig",
     "PhysicsConfig",
     "RLConfig",
-    "RenderConfig",
     "RewardConfig",
     "RewardTermsConfig",
     "ScenarioCurriculumConfig",
     "SimulationConfig",
-    "SupervisorConfig",
     "VirusConfig",
     "load_config",
 ]

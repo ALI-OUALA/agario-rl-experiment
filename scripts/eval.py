@@ -24,7 +24,6 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--episodes", type=int, default=10)
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--deterministic", action="store_true")
-    parser.add_argument("--render", action="store_true")
     parser.add_argument("--checkpoint", type=str, default=None)
     parser.add_argument("--action-mode", type=str, choices=["continuous", "discrete_9way"], default=None)
     parser.add_argument("--device", type=str, choices=["auto", "cpu", "cuda", "xpu"], default="auto")
@@ -42,7 +41,7 @@ def main() -> None:
         config.simulation.action_mode = args.action_mode
     set_global_seeds(config.seed)
 
-    env = AgarioMultiAgentEnv(config=config, enable_render=args.render)
+    env = AgarioMultiAgentEnv(config=config, enable_render=False)
     trainer = SharedPPOTrainer(
         config=config,
         observation_dim=env.observation_space["shape"][0],
@@ -50,7 +49,7 @@ def main() -> None:
         inference_device=args.inference_device,
     )
 
-    checkpoint = Path(args.checkpoint) if args.checkpoint else (project_root / config.supervisor.checkpoint_path)
+    checkpoint = Path(args.checkpoint) if args.checkpoint else (project_root / config.checkpoint.latest_path)
     loaded = trainer.load(checkpoint)
     print(
         f"Checkpoint loaded: {loaded} ({checkpoint}) "
@@ -68,8 +67,6 @@ def main() -> None:
             for agent_id, reward in rewards.items():
                 score[agent_id] += reward
             done = bool(dones.get("__all__", False))
-            if args.render:
-                env.render(extra_stats={"episode": episode_idx + 1}, show_help=False)
         meanscore = float(np.mean(list(score.values())))
         episode_scores.append(meanscore)
         winner = infos.get("__global__", {}).get("winner")

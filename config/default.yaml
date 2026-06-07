@@ -105,25 +105,6 @@ curriculum:
   advance_survival_rate: 0.7
   min_stage_steps: 200
 
-render:
-  enabled: true
-  window_width: 1920
-  window_height: 1080
-  side_panel_width: 620
-  start_fullscreen: false
-  window_resizable: true
-  fps: 60
-  show_help_by_default: true
-  theme: agar_reference_hybrid
-  overlay_mode_default: minimal
-  grid_enabled_default: true
-  grid_spacing: 40
-  grid_line_width: 2
-  hud_refresh_hz: 15
-  cache_grid_surface: true
-  show_agent_labels: true
-  show_score_chip: true
-
 simulation:
   physics_hz: 90
   decision_hz: 15
@@ -140,12 +121,8 @@ async_training:
   min_rollout_transitions_per_job: 1024
   max_pending_weight_updates: 2
 
-supervisor:
-  min_speed_multiplier: 0.25
-  max_speed_multiplier: 16.0
-  speed_step: 0.25
-  checkpoint_path: checkpoints/latest.pt
-  auto_update_when_ready: true
+checkpoint:
+  latest_path: checkpoints/latest.pt
 
 logging:
   log_dir: logs

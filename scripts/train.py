@@ -26,6 +26,7 @@ def parse_args() -> argparse.Namespace:
     parser.add_argument("--seed", type=int, default=None)
     parser.add_argument("--checkpoint-dir", type=str, default="checkpoints")
     parser.add_argument("--checkpoint", type=str, default=None)
+    parser.add_argument("--metrics-csv", type=str, default=None)
     parser.add_argument("--resume", action="store_true")
     parser.add_argument("--action-mode", type=str, choices=["continuous", "discrete_9way"], default=None)
     parser.add_argument("--scenario-preset", type=str, choices=["classic", "agario_curriculum", "full_arena"], default="classic")
@@ -64,13 +65,18 @@ def main() -> None:
         inference_device=args.inference_device,
     )
 
-    logger = TrainingMetricsLogger(project_root / config.logging.train_metrics_csv)
+    metrics_csv = _resolve_project_path(
+        project_root=project_root,
+        raw_path=args.metrics_csv,
+        fallback=config.logging.train_metrics_csv,
+    )
+    logger = TrainingMetricsLogger(metrics_csv)
     checkpoint_dir = project_root / args.checkpoint_dir
     checkpoint_dir.mkdir(parents=True, exist_ok=True)
     latest_checkpoint_path = _resolve_project_path(
         project_root=project_root,
         raw_path=args.checkpoint,
-        fallback=config.supervisor.checkpoint_path,
+        fallback=config.checkpoint.latest_path,
     )
 
     starting_update = 0
@@ -122,9 +128,6 @@ def main() -> None:
             trainer.save(checkpoint_dir / f"checkpoint_{update_idx:05d}.pt")
 
     trainer.save(latest_checkpoint_path)
-    default_latest_path = project_root / config.supervisor.checkpoint_path
-    if latest_checkpoint_path != default_latest_path:
-        trainer.save(default_latest_path)
     env.close()
     print("Training complete.")
 

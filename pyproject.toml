@@ -1,16 +1,17 @@
 [project]
 name = "agario-rl-experiment"
 version = "0.1.0"
-description = "Minimal multi-agent Agar.io-style RL lab with supervisor controls."
+description = "Multi-agent Agar.io-style RL lab with a browser game runtime."
 readme = "README.md"
 requires-python = ">=3.11"
 license = { text = "MIT" }
 dependencies = [
   "numpy>=1.26",
-  "raylib>=5.5.0.4",
+  "fastapi>=0.115",
   "torch>=2.2",
   "PyYAML>=6.0",
   "matplotlib>=3.8",
+  "uvicorn[standard]>=0.30",
 ]
 
 [project.optional-dependencies]

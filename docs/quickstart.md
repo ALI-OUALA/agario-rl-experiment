@@ -1,285 +1,126 @@
 # Quickstart
 
-This page is optimized for copy-paste use on Windows. It gives you the
-shortest path to install the project, run the main workflows, and test the
-current checkpoints.
+This page shows the three normal workflows: run the game, train agents, and
+evaluate agents.
 
-## Copy-paste setup
-
-Run these commands from the project root.
-
-### Create and activate the venv
+## Install
 
 ```powershell
 python -m venv .venv
-```
-
-```powershell
 .\.venv\Scripts\Activate.ps1
-```
-
-### Install the project
-
-```powershell
 python -m pip install -e .[dev]
 ```
 
-### Optional: install Intel Arc XPU wheels
+Install Node.js if `npm` is not available. The first `scripts/run_game.py` run
+installs frontend packages inside `web/` automatically.
 
-Run this only if you want to test Intel Arc acceleration.
-
-```powershell
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
-```
-
-### Optional: verify Intel Arc detection
+## Run the browser game
 
 ```powershell
-python -c "import torch; print(torch.xpu.is_available())"
+python scripts/run_game.py
 ```
 
-## Most common commands
+Open `http://127.0.0.1:5173/`.
 
-If you only want the main commands in one place, use this section.
-
-### Train from scratch
+Modes:
 
 ```powershell
-python scripts/train.py --updates 10 --device auto
+python scripts/run_game.py --mode showcase
+python scripts/run_game.py --mode play
+python scripts/run_game.py --mode training-view
 ```
 
-### Train with the scenario curriculum
+Useful flags:
+
+- `--api-port 8765`: FastAPI and WebSocket port.
+- `--web-port 5173`: Vite frontend port.
+- `--checkpoint checkpoints/human_ready_v1/latest.pt`: checkpoint loaded for
+  checkpoint-backed opponents.
+- `--no-open`: start servers without opening a browser.
+- `--skip-npm-install`: do not run `npm install` automatically.
+
+Controls in `play` mode:
+
+- Move mouse to steer.
+- Press Space to split.
+- Press R or the Reset button to reset the arena.
+
+## Train agents
+
+Baseline:
 
 ```powershell
-python scripts/train.py --updates 10 --scenario-preset agario_curriculum --continuing-respawn --device auto
+python scripts/train.py --updates 20 --device auto
 ```
 
-### Resume the main checkpoint to a target update
-
-```powershell
-python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt --device auto
-```
-
-### Run a no-save showcase demo
-
-```powershell
-python scripts/showcase.py
-```
-
-### Play against the current agents
-
-```powershell
-python scripts/play.py --checkpoint checkpoints/latest.pt
-```
-
-### Evaluate the current checkpoint
-
-```powershell
-python scripts/eval.py --checkpoint checkpoints/latest.pt --episodes 5 --deterministic --device auto
-```
-
-### Train the mixed-opponent human-ready run
+Human-ready mixed-opponent path:
 
 ```powershell
 python scripts/train_human_ready.py --updates 80 --device auto
 ```
 
-### Resume the mixed-opponent human-ready run
+Scenario curriculum:
 
 ```powershell
-python scripts/train_human_ready.py --resume --updates 160 --checkpoint checkpoints/human_ready_v1/latest.pt --checkpoint-dir checkpoints/human_ready_v1 --metrics-csv logs/human_ready_v1_train_metrics.csv --opponent-checkpoint checkpoints/checkpoint_00500.pt --device cpu --inference-device cpu
+python scripts/train.py --updates 20 --scenario-preset agario_curriculum --continuing-respawn --device auto
 ```
 
-### Evaluate human-readiness
-
-```powershell
-python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20 --device auto
-```
-
-## Workflow guide
-
-Use this section when you want a little context with the commands.
-
-### Train quickly
-
-Run a short headless training pass when you want a new sequence that starts at
-update `1`.
-
-```powershell
-python scripts/train.py --updates 10 --device auto
-```
-
-This command writes:
-
-- `logs/train_metrics.csv`
-- `checkpoints/checkpoint_*.pt`
-- `checkpoints/latest.pt`
-
-### Train with the large full-arena preset
-
-```powershell
-python scripts/train.py --updates 10 --scenario-preset full_arena --device auto
-```
-
-The `full_arena` preset uses a larger Agar.io-style map, more agents, more
-pellets, viruses, mass decay, ejected mass, continuing respawn, and the richer
-observation and reward terms. It is the default presentation target for
-showcase and play modes.
-
-### Train with the scenario curriculum
-
-Run the scenario preset when you want the richer Agar.io-style environment.
-
-```powershell
-python scripts/train.py --updates 10 --scenario-preset agario_curriculum --continuing-respawn --device auto
-```
-
-This path keeps the existing `env.reset()` and `env.step(actions)` contract,
-but it activates viruses, ejected mass, mass decay, continuing respawn, richer
-observation features, and extra reward terms. It writes the same files as
-classic training:
-
-- `logs/train_metrics.csv`
-- `checkpoints/checkpoint_*.pt`
-- `checkpoints/latest.pt`
-
-Use `--scenario-preset classic` or omit the flag when you want the baseline
-environment.
-
-### Resume a saved checkpoint
-
-Run resume mode when you want to continue a checkpoint to a target milestone
-without resetting the update counter.
+Resume:
 
 ```powershell
 python scripts/train.py --resume --updates 500 --checkpoint checkpoints/latest.pt --device auto
 ```
 
-### Run a no-save showcase
+Training writes checkpoints and `logs/train_metrics.csv`. The browser game can
+display that latest metrics row but does not save new checkpoints.
 
-Run this when you want a visitor-friendly example without writing checkpoints
-or metric logs.
-
-```powershell
-python scripts/showcase.py
-```
-
-The showcase defaults to the large full-arena preset and the
-`checkpoints/human_ready_v1/latest.pt` checkpoint. If the checkpoint is missing
-or incompatible, it still runs with the scripted opponent pool.
-
-For CI or a quick local smoke test:
+Low-resource smoke:
 
 ```powershell
-python scripts/showcase.py --headless --seconds 5 --checkpoint checkpoints/missing_showcase.pt
+$smoke = Join-Path $env:TEMP "agario_rl_smoke"
+python scripts/train.py --updates 1 --device cpu --checkpoint "$smoke/latest.pt" --checkpoint-dir "$smoke" --metrics-csv "$smoke/train_metrics.csv"
 ```
 
-### Play against the current agents
+This proves the live training loop works without touching protected project
+checkpoints.
 
-Run the dedicated play mode when you want to test the trained bots directly.
-
-```powershell
-python scripts/play.py --checkpoint checkpoints/latest.pt
-```
-
-Play mode uses these controls:
-
-- move the mouse to steer
-- press `Space` to split
-- press `Enter` to restart after death or at the end of a round
-
-The player no longer gets a human-only eject action in default play mode. That
-older setup was unfair because the bots had never been trained to answer that
-extra option.
-
-### Evaluate a checkpoint
-
-Run a short deterministic evaluation against the latest checkpoint.
+## Evaluate agents
 
 ```powershell
 python scripts/eval.py --checkpoint checkpoints/latest.pt --episodes 5 --deterministic --device auto
 ```
 
-### Train against the mixed opponent pool
-
-Run the human-readiness training loop when you want a fresh learner to face
-something stronger than mirror self-play.
+Human-readiness evaluation:
 
 ```powershell
-python scripts/train_human_ready.py --updates 80 --device auto
+python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 5
 ```
 
-If you want to continue the current `human_ready_v1` checkpoint instead of
-starting over, use:
+## Verify changes
+
+Python:
 
 ```powershell
-python scripts/train_human_ready.py --resume --updates 160 --checkpoint checkpoints/human_ready_v1/latest.pt --checkpoint-dir checkpoints/human_ready_v1 --metrics-csv logs/human_ready_v1_train_metrics.csv --opponent-checkpoint checkpoints/checkpoint_00500.pt --device cpu --inference-device cpu
+.\.venv\Scripts\python.exe -m pytest tests\test_browser_runtime.py tests\test_simulator_upgrade.py tests\test_scenario_training_smoke.py
 ```
 
-### Evaluate human-readiness proxies
-
-Run the proxy evaluator when you want metrics that reflect the kinds of
-mistakes a human punishes, such as corner camping and bad threat response.
+Frontend:
 
 ```powershell
-python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20 --device auto
+cd web
+npm install
+npm run build
 ```
 
-### Benchmark CPU versus Intel Arc
-
-Run the training benchmark before deciding whether `xpu` helps on your
-machine.
+Browser smoke:
 
 ```powershell
-python scripts/benchmark_perf.py --mode train --updates 2 --device cpu
+python scripts/run_game.py --mode play
 ```
 
-```powershell
-python scripts/benchmark_perf.py --mode train --updates 2 --device xpu
-```
+Then open `http://127.0.0.1:5173/?mode=play` and confirm that the arena,
+pellets, agents, minimap, leaderboard, training state, and keyboard/mouse input
+are visible.
 
-The benchmark prints rollout time and PPO update time separately. That matters
-because this project is still heavily rollout-bound.
-
-### Benchmark step or render cost
-
-Run the benchmark script when you want a quick performance check.
-
-```powershell
-python scripts/benchmark_perf.py --mode step --steps 400
-```
-
-```powershell
-python scripts/benchmark_perf.py --mode render --frames 180 --overlay full
-```
-
-## Learn the basic cockpit controls
-
-The observer cockpit exposes the same actions through buttons and keyboard
-shortcuts. These are the most important shortcuts to learn first:
-
-- `Space`: pause or resume
-- `N`: step one physics tick
-- `Shift+N`: step one decision tick
-- `-` and `+`: slow down or speed up
-- `T`: toggle Train More
-- `R`: reset the episode and session wins
-- `1`, `2`, `3`: focus the camera on an agent
-- `W`, `A`, `S`, `D` or arrow keys: pan the camera manually
-- middle mouse drag: pan the viewport
-- `0`: return to follow mode
-- `Tab`: switch compact and full cockpit layouts
-- `F11`: toggle fullscreen
-- `F1`: toggle the built-in help overlay
-
-## Next steps
-
-Use these pages after your first run:
-
-1. Read [README.md](../README.md) for the full project overview.
-2. Read [experiment-results.md](./experiment-results.md) for the current
-   milestone report.
-3. Read [controls_and_tuning.md](./controls_and_tuning.md) for the full
-   cockpit reference.
-4. Read [runtime_architecture.md](./runtime_architecture.md) to understand the
-   snapshot-driven runtime design.
+For the full story and readiness checklist, read
+`docs/project_story_and_readiness.md`.

@@ -32,7 +32,7 @@ def test_train_script_resumes_to_target_update_and_logs_global_counts(tmp_path) 
     raw_config["logging"]["train_metrics_csv"] = str(metrics_csv)
     raw_config["logging"]["checkpoint_every_updates"] = 10
     raw_config["logging"]["print_every_updates"] = 1000
-    raw_config["supervisor"]["checkpoint_path"] = str(latest_checkpoint)
+    raw_config["checkpoint"]["latest_path"] = str(latest_checkpoint)
     raw_config["curriculum"]["enabled"] = False
     config_path.write_text(yaml.safe_dump(raw_config), encoding="utf-8")
 
@@ -70,3 +70,49 @@ def test_train_script_resumes_to_target_update_and_logs_global_counts(tmp_path) 
 
     rows = list(csv.DictReader(metrics_csv.open("r", newline="", encoding="utf-8")))
     assert [int(row["update"]) for row in rows] == [367, 368, 369, 370]
+
+
+def test_train_script_custom_checkpoint_does_not_write_default_latest(tmp_path) -> None:
+    checkpoint_dir = tmp_path / "custom_checkpoints"
+    custom_checkpoint = checkpoint_dir / "latest.pt"
+    default_checkpoint = tmp_path / "default_latest.pt"
+    metrics_csv = tmp_path / "custom_metrics.csv"
+    config_path = tmp_path / "custom_checkpoint_config.yaml"
+
+    raw_config = yaml.safe_load((PROJECT_ROOT / "config/default.yaml").read_text(encoding="utf-8"))
+    raw_config["rl"]["steps_per_update"] = 6
+    raw_config["rl"]["minibatch_size"] = 6
+    raw_config["rl"]["ppo_epochs"] = 1
+    raw_config["logging"]["train_metrics_csv"] = str(tmp_path / "default_metrics.csv")
+    raw_config["logging"]["checkpoint_every_updates"] = 10
+    raw_config["logging"]["print_every_updates"] = 1000
+    raw_config["checkpoint"]["latest_path"] = str(default_checkpoint)
+    raw_config["curriculum"]["enabled"] = False
+    config_path.write_text(yaml.safe_dump(raw_config), encoding="utf-8")
+
+    subprocess.run(
+        [
+            sys.executable,
+            str(PROJECT_ROOT / "scripts/train.py"),
+            "--config",
+            str(config_path),
+            "--updates",
+            "1",
+            "--checkpoint",
+            str(custom_checkpoint),
+            "--checkpoint-dir",
+            str(checkpoint_dir),
+            "--metrics-csv",
+            str(metrics_csv),
+            "--device",
+            "cpu",
+        ],
+        cwd=PROJECT_ROOT,
+        check=True,
+        capture_output=True,
+        text=True,
+    )
+
+    assert custom_checkpoint.exists()
+    assert metrics_csv.exists()
+    assert not default_checkpoint.exists()

@@ -1,17 +1,20 @@
-# Agario RL browser experiment
+# Agario RL Experiment
 
-This repository is a deterministic Agar.io-style reinforcement-learning lab.
-Python owns the simulator, reward terms, opponent policies, PPO trainer, and
-checkpoint loading. The user-facing game is now a local browser app that reads
-live Python frames over WebSockets and renders a smooth canvas arena.
+A deterministic Agar.io-style reinforcement-learning lab with a Python simulator, PPO training, FastAPI/WebSockets, and a Vite/TypeScript browser client.
 
-The project is not a wrapper around the public Agar.io website. It trains agents
-inside the local `AgarioWorld` simulator so runs are reproducible, inspectable,
-and testable.
+> The project trains agents inside a local `AgarioWorld` simulator. It does not automate or wrap the public Agar.io website.
 
-## Main workflows
+## At a glance
 
-### 1. Run the browser game
+| Area | Implementation |
+| --- | --- |
+| Environment | Deterministic multi-agent Agar.io-style simulator |
+| Learning | Shared PPO trainer with scripted and checkpoint opponents |
+| Runtime | FastAPI + WebSockets |
+| Frontend | Vite, TypeScript, Canvas |
+| Modes | Showcase, human play, and training telemetry |
+
+## Run the browser experiment
 
 ```powershell
 python scripts/run_game.py
@@ -27,14 +30,11 @@ python scripts/run_game.py --mode training-view
 
 Open `http://127.0.0.1:5173/` if the browser does not open automatically.
 
-What the modes mean:
-
 - `showcase`: bot-vs-bot full arena with no checkpoint or log writes.
 - `play`: human controls `agent_0` with mouse steering and Space split.
-- `training-view`: same live arena, with training and human-readiness telemetry
-  emphasized in the UI.
+- `training-view`: live arena with training and human-readiness telemetry.
 
-### 2. Train agents
+## Train agents
 
 Baseline training:
 
@@ -54,11 +54,9 @@ Scenario-curriculum training:
 python scripts/train.py --updates 20 --scenario-preset agario_curriculum --continuing-respawn --device auto
 ```
 
-Training writes CSV metrics and checkpoints. The browser game reads those
-metrics for visibility but does not write checkpoints unless a training command
-is running.
+Training writes CSV metrics and checkpoints. The browser game reads those metrics for visibility but does not write checkpoints unless a training command is running.
 
-### 3. Evaluate agents
+## Evaluate agents
 
 ```powershell
 python scripts/eval.py --checkpoint checkpoints/latest.pt --episodes 5 --deterministic --device auto
@@ -80,8 +78,7 @@ python -m venv .venv
 python -m pip install -e .[dev]
 ```
 
-Node.js is required for the Vite frontend. `scripts/run_game.py` runs
-`npm install` inside `web/` on first launch unless `--skip-npm-install` is set.
+Node.js is required for the Vite frontend. `scripts/run_game.py` runs `npm install` inside `web/` on first launch unless `--skip-npm-install` is set.
 
 Optional Intel Arc / XPU wheels:
 
@@ -95,46 +92,34 @@ python -m pip install torch torchvision torchaudio --index-url https://download.
 - Pellets are small food dots. Agents grow by eating pellets and smaller cells.
 - Viruses are green spiked hazards. Large cells must route around them.
 - Ejected mass appears as small blue pieces when the simulator enables ejects.
-- Edge arrows show off-screen threats and targets so users understand danger
-  even when the map is bigger than the viewport.
-- The minimap shows the full arena, all agents, viruses, and the current camera
-  window.
-- Training panels show scenario, update count, active checkpoint, reward-derived
-  split safety, useful splits, unsafe splits, FPS, and current population.
+- Edge arrows show off-screen threats and targets.
+- The minimap shows the full arena, all agents, viruses, and camera window.
+- Training panels show scenario, update count, active checkpoint, split safety, useful and unsafe splits, FPS, and current population.
 
-## Project layout
+## Architecture
 
-- `agario_rl/env/`: world rules, collisions, observations, rewards, respawn, and
-  the multi-agent env wrapper.
-- `agario_rl/rl/`: shared PPO trainer, networks, buffers, and async utilities.
-- `agario_rl/opponents.py`: scripted and checkpoint-backed opponent policies
-  used for human-ready mixed-opponent training.
-- `agario_rl/web/`: FastAPI app, WebSocket session runtime, and JSON frame
-  serialization for the browser.
+- `agario_rl/env/`: world rules, collisions, observations, rewards, respawn, and the multi-agent environment wrapper.
+- `agario_rl/rl/`: PPO trainer, networks, buffers, and async utilities.
+- `agario_rl/opponents.py`: scripted and checkpoint-backed opponent policies.
+- `agario_rl/web/`: FastAPI app, WebSocket session runtime, and frame serialization.
 - `web/`: Vite + TypeScript canvas frontend.
 - `scripts/run_game.py`: starts the API and browser dev server together.
 - `scripts/train.py`: baseline and scenario-curriculum PPO training.
-- `scripts/train_human_ready.py`: mixed-opponent training path for agents that
-  should behave better around humans.
-- `scripts/eval.py` and `scripts/eval_human_readiness.py`: checkpoint
-  evaluation.
-- `docs/`: quickstart, architecture, controls/tuning, learning notes, and
-  experiment reports.
-- `docs/project_story_and_readiness.md`: what was finished, why the browser
-  reset matters, and how to verify readiness on different devices.
+- `scripts/train_human_ready.py`: mixed-opponent training path.
+- `scripts/eval.py` and `scripts/eval_human_readiness.py`: checkpoint evaluation.
+- `docs/`: quickstart, architecture, controls, tuning, learning notes, and experiment reports.
 
 ## Human-ready training goal
 
-The reward and UI focus is survival-quality behavior, not just splitting often.
-The recommended training path mixes checkpoint opponents with scripted foragers,
-evaders, hunters, and objective-driven bots. The reward terms and visible
-counters emphasize:
+The reward and UI focus is survival-quality behavior, not simply splitting often. The recommended training path mixes checkpoint opponents with scripted foragers, evaders, hunters, and objective-driven bots.
+
+The visible counters emphasize:
 
 - safe survival near larger threats
 - useful split attacks only when the target is catchable
 - penalties for unsafe splits and deaths after bad splits
 - target pressure without chasing into corners or viruses
-- continuing respawn quality so agents recover into playable matches
+- continuing-respawn quality
 
 ## Verification
 
@@ -166,5 +151,4 @@ python scripts/run_game.py --mode play
 
 Then inspect `http://127.0.0.1:5173/?mode=play`.
 
-For a complete project narrative and readiness checklist, read
-`docs/project_story_and_readiness.md`.
+For the complete project narrative and readiness checklist, read [`docs/project_story_and_readiness.md`](docs/project_story_and_readiness.md).

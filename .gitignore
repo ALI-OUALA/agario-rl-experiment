@@ -1,5 +1,4 @@
 .venv/
-.codex/
 .playwright-mcp/
 .pytest_cache/
 .pytest_tmp/
@@ -18,4 +17,5 @@ checkpoints/*.pt
 !checkpoints/checkpoint_00500.pt
 !checkpoints/human_ready_v1/latest.pt
 !checkpoints/human_ready_v1/checkpoint_00080.pt
-docs/linkedin-post.md
+!checkpoints/recovery_201_500/
+!checkpoints/recovery_201_500/latest.pt

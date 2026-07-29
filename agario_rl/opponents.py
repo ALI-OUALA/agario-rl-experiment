@@ -61,12 +61,7 @@ def assign_opponents(
 
 
 def _agent_center(world: AgarioWorld, agent_id: str) -> np.ndarray:
-    cells = world.agents[agent_id]
-    if not cells:
-        return np.array([world.map_size * 0.5, world.map_size * 0.5], dtype=np.float32)
-    masses = np.array([cell.mass for cell in cells], dtype=np.float32)
-    positions = np.stack([cell.position for cell in cells], axis=0)
-    return (positions * masses[:, None]).sum(axis=0) / max(float(masses.sum()), 1e-6)
+    return world.agent_center(agent_id)
 
 
 def _agent_mass(world: AgarioWorld, agent_id: str) -> float:
@@ -86,8 +81,10 @@ def _nearest_pellet_direction(world: AgarioWorld, agent_id: str) -> np.ndarray:
     if not world.pellets:
         return np.zeros((2,), dtype=np.float32)
     center = _agent_center(world, agent_id)
-    target = min(world.pellets, key=lambda pellet: float(np.sum((pellet.position - center) ** 2)))
-    return target.position - center
+    positions = np.stack([pellet.position for pellet in world.pellets], axis=0)
+    deltas = positions - center[None, :]
+    dist_sq = np.einsum("ij,ij->i", deltas, deltas)
+    return deltas[int(np.argmin(dist_sq))]
 
 
 def _nearby_virus_avoidance(world: AgarioWorld, agent_id: str) -> np.ndarray:
@@ -262,6 +259,25 @@ class CheckpointPolicy:
         return actions[agent_id]
 
 
+_checkpoint_policy_cache: dict[str, CheckpointPolicy] = {}
+
+
+def _cached_checkpoint_policy(config: AgarioConfig, checkpoint_path: Path) -> CheckpointPolicy:
+    """Reuse a loaded checkpoint policy across sessions.
+
+    Building it involves constructing a PyTorch network and loading weights
+    from disk, which is slow enough to stall the browser runtime's single
+    asyncio event loop if repeated on every WebSocket (re)connect.
+    """
+    key = str(checkpoint_path.resolve())
+    cached = _checkpoint_policy_cache.get(key)
+    if cached is not None:
+        return cached
+    policy = CheckpointPolicy(config=config, checkpoint_path=checkpoint_path)
+    _checkpoint_policy_cache[key] = policy
+    return policy
+
+
 def build_default_opponent_pool(
     config: AgarioConfig,
     checkpoint_path: str | Path,
@@ -274,7 +290,7 @@ def build_default_opponent_pool(
         OpportunisticHunterPolicy(),
     ]
     try:
-        pool.insert(0, CheckpointPolicy(config=config, checkpoint_path=Path(checkpoint_path)))
+        pool.insert(0, _cached_checkpoint_policy(config, Path(checkpoint_path)))
     except (FileNotFoundError, RuntimeError, ValueError):
         pass
     return pool

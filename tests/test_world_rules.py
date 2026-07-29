@@ -35,6 +35,33 @@ def test_pellet_eating_increases_mass() -> None:
     assert after_mass > before_mass
 
 
+def test_zero_direction_eject_does_not_delete_mass() -> None:
+    config = AgarioConfig()
+    config.physics.enable_eject_mechanic = True
+    world = AgarioWorld(config=config, seed=124)
+    agent_id = world.agent_ids[0]
+    before_mass = world.agents[agent_id][0].mass
+
+    world.eject_mass(agent_id, np.zeros(2, dtype=np.float32))
+
+    assert world.agents[agent_id][0].mass == before_mass
+    assert world.ejected_masses == []
+
+
+def test_cell_center_stays_one_radius_inside_world_bounds() -> None:
+    config = AgarioConfig()
+    world = AgarioWorld(config=config, seed=125)
+    agent_id = world.agent_ids[0]
+    cell = world.agents[agent_id][0]
+    cell.position = np.array([0.0, config.map.start_size], dtype=np.float32)
+
+    world.step(_zero_actions(world))
+
+    radius = cell.radius(config.physics.radius_scale)
+    assert cell.position[0] >= radius
+    assert cell.position[1] <= world.map_size - radius
+
+
 def test_larger_cell_eats_smaller_cell_with_ratio_threshold() -> None:
     config = AgarioConfig()
     world = AgarioWorld(config=config, seed=321)

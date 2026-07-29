@@ -12,14 +12,16 @@ from agario_rl.env.world import AgarioWorld
 
 
 AGENT_COLORS: tuple[str, ...] = (
-    "#35c3ff",
-    "#ff5f7e",
-    "#54d36b",
-    "#ffd166",
-    "#a78bfa",
-    "#f97316",
-    "#22d3ee",
-    "#fb7185",
+    "#3399ff",
+    "#ff3333",
+    "#33cc66",
+    "#ffaa22",
+    "#cc33ff",
+    "#22cccc",
+    "#ff66cc",
+    "#99cc33",
+    "#ff8833",
+    "#6666ff",
 )
 
 
@@ -28,12 +30,25 @@ def _xy(value: np.ndarray) -> dict[str, float]:
 
 
 def _agent_center(world: AgarioWorld, agent_id: str) -> np.ndarray:
-    cells = world.agents[agent_id]
-    if not cells:
-        return np.array([world.map_size * 0.5, world.map_size * 0.5], dtype=np.float32)
-    masses = np.array([cell.mass for cell in cells], dtype=np.float32)
-    positions = np.stack([cell.position for cell in cells], axis=0)
-    return (positions * masses[:, None]).sum(axis=0) / max(float(masses.sum()), 1e-6)
+    return world.agent_center(agent_id)
+
+
+def _pellets_payload(world: AgarioWorld) -> dict[str, list[float]]:
+    """Columnar pellet arrays instead of one dict per pellet.
+
+    Pellets dominate frame size (hundreds per tick vs a handful of agents),
+    so dropping the per-pellet id/dict overhead and vectorizing the rounding
+    meaningfully shrinks both the JSON payload and the time spent building it.
+    """
+    if not world.pellets:
+        return {"x": [], "y": [], "mass": []}
+    positions = np.stack([pellet.position for pellet in world.pellets], axis=0)
+    masses = np.array([pellet.mass for pellet in world.pellets], dtype=np.float32)
+    return {
+        "x": np.round(positions[:, 0], 3).tolist(),
+        "y": np.round(positions[:, 1], 3).tolist(),
+        "mass": np.round(masses, 3).tolist(),
+    }
 
 
 def _agent_mass(world: AgarioWorld, agent_id: str) -> float:
@@ -122,8 +137,8 @@ def build_browser_frame(
                         "id": cell.cell_id,
                         "x": round(float(cell.position[0]), 3),
                         "y": round(float(cell.position[1]), 3),
-                        "vx": round(float(cell.velocity[0]), 3),
-                        "vy": round(float(cell.velocity[1]), 3),
+                        "vx": round(float(cell.total_velocity()[0]), 3),
+                        "vy": round(float(cell.total_velocity()[1]), 3),
                         "mass": round(float(cell.mass), 3),
                         "radius": round(float(cell.radius(world.config.physics.radius_scale)), 3),
                     }
@@ -164,10 +179,7 @@ def build_browser_frame(
         "playerId": player_id,
         "agents": agents,
         "leaderboard": leaderboard,
-        "pellets": [
-            {"id": pellet.pellet_id, "x": round(float(pellet.position[0]), 3), "y": round(float(pellet.position[1]), 3), "mass": round(float(pellet.mass), 3)}
-            for pellet in world.pellets
-        ],
+        "pellets": _pellets_payload(world),
         "viruses": [
             {
                 "id": virus.virus_id,

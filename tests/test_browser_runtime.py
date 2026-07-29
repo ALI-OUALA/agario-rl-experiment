@@ -23,6 +23,26 @@ def test_browser_input_normalizes_and_consumes_split() -> None:
     assert browser_input.split is False
 
 
+def test_browser_play_mode_ejects_mass_in_steer_direction() -> None:
+    session = BrowserGameSession(
+        project_root=PROJECT_ROOT,
+        mode="play",
+        checkpoint_path="checkpoints/does-not-exist.pt",
+        seed=19,
+    )
+    try:
+        session.apply_client_message(
+            {"type": "input", "steer": {"x": 1.0, "y": 0.0}, "eject": True}
+        )
+        session.step()
+        ejected = session.env.world.ejected_masses
+    finally:
+        session.close()
+
+    assert len(ejected) == 1
+    assert ejected[0].velocity[0] > 0.0
+
+
 def test_browser_input_rejects_invalid_steer_values() -> None:
     browser_input = BrowserInput(steer_x=0.25, steer_y=-0.25)
 
@@ -49,7 +69,7 @@ def test_browser_session_frame_schema_exposes_training_state() -> None:
     assert frame["mode"] == "showcase"
     assert frame["mapSize"] >= 2000
     assert len(frame["agents"]) >= 6
-    assert len(frame["pellets"]) > 0
+    assert len(frame["pellets"]["x"]) > 0
     assert "leaderboard" in frame
     assert "policySource" in frame["training"]
     assert "humanReadiness" in frame["training"]

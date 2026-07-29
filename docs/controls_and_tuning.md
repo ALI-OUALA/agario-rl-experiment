@@ -6,6 +6,9 @@
 
 - Mouse position steers `agent_0`.
 - Space sends one split action.
+- W ejects mass in the current steer direction; holding it respects the
+  simulator eject cooldown.
+- Arrow keys provide alternate steering.
 - R resets the arena.
 - The Reset button sends the same reset message.
 - The mode selector reconnects the WebSocket with `showcase`, `play`, or
@@ -13,6 +16,17 @@
 
 The browser sends normalized continuous actions: `[steer_x, steer_y, split]`.
 Python consumes the split flag once so holding Space does not spam every frame.
+Ejection is a browser message flag wired to the simulator's existing eject
+mechanic; it does not change the stable RL action vector.
+
+## Smooth browser baseline
+
+- The server publishes authoritative frames at 30 Hz.
+- The canvas renders at display refresh rate with frame interpolation and
+  elapsed-time camera smoothing.
+- Pellet paths are color-batched and off-screen pellets are culled.
+- HUD DOM updates are limited to 5 Hz; gameplay canvas remains independent.
+- Main-canvas device pixel ratio is capped at 2 for predictable local GPU cost.
 
 ## Game modes
 

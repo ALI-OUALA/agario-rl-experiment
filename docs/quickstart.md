@@ -43,6 +43,8 @@ Controls in `play` mode:
 
 - Move mouse to steer.
 - Press Space to split.
+- Press W to eject mass in the current steer direction.
+- Use arrow keys for alternate steering.
 - Press R or the Reset button to reset the arena.
 
 ## Train agents
@@ -122,5 +124,5 @@ Then open `http://127.0.0.1:5173/?mode=play` and confirm that the arena,
 pellets, agents, minimap, leaderboard, training state, and keyboard/mouse input
 are visible.
 
-For the full story and readiness checklist, read
-`docs/project_story_and_readiness.md`.
+For measured training and evaluation results, read
+`docs/experiment-results.md`.

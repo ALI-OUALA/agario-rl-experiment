@@ -60,6 +60,8 @@ class AgarioWorld:
         self.viruses: list[Virus] = []
         self.ejected_masses: list[EjectedMass] = []
         self.prev_cell_positions: dict[int, np.ndarray] = {}
+        self._center_cache: dict[str, np.ndarray] = {}
+        self._center_cache_step: int = -1
         self.step_split_attempts: dict[str, int] = {}
         self.step_successful_splits: dict[str, int] = {}
         self.step_unsafe_splits: dict[str, int] = {}
@@ -131,6 +133,8 @@ class AgarioWorld:
         self.next_virus_id = 0
         self.next_ejected_id = 0
         self.agents = {agent_id: [] for agent_id in self.agent_ids}
+        self._center_cache = {}
+        self._center_cache_step = -1
 
         positions = self._sample_spawn_positions(self.config.num_agents)
         for idx, agent_id in enumerate(self.agent_ids):
@@ -225,6 +229,9 @@ class AgarioWorld:
         self._merge_cells_if_ready()
         self._apply_mass_decay(float(dt))
         respawned_agents = self._respawn_eliminated_agents(elimination_pairs)
+        self._constrain_cells_to_bounds()
+        if respawned_agents:
+            self._center_cache = {}
         self._respawn_pellets(force_full=False)
         self._respawn_viruses(force_full=False)
 
@@ -314,7 +321,13 @@ class AgarioWorld:
             if velocity_norm > max_velocity and velocity_norm > 1e-6:
                 cell.velocity = (cell.velocity / velocity_norm) * max_velocity
 
-            cell.position = cell.position + cell.velocity * dt_scale
+            # The split/eject impulse decays on its own schedule rather than
+            # being clamped to normal movement speed, so a split still reads
+            # as a fast outward lunge (like Agar.io) instead of being capped
+            # to the target cell's cruising speed the instant it happens.
+            cell.boost_velocity = (effective_drag * cell.boost_velocity).astype(np.float32)
+
+            cell.position = cell.position + (cell.velocity + cell.boost_velocity) * dt_scale
             self._apply_boundary_collision(cell)
 
             if cell.split_cooldown > 0:
@@ -325,21 +338,33 @@ class AgarioWorld:
                 cell.eject_cooldown -= 1
 
     def _apply_boundary_collision(self, cell: Cell) -> None:
-        if cell.position[0] < 0.0:
-            cell.position[0] = 0.0
+        radius = min(cell.radius(self.config.physics.radius_scale), self.map_size * 0.5)
+        lower = radius
+        upper = self.map_size - radius
+        if cell.position[0] < lower:
+            cell.position[0] = lower
             cell.velocity[0] = 0.0
-        elif cell.position[0] > self.map_size:
-            cell.position[0] = self.map_size
+            cell.boost_velocity[0] = 0.0
+        elif cell.position[0] > upper:
+            cell.position[0] = upper
             cell.velocity[0] = 0.0
+            cell.boost_velocity[0] = 0.0
 
-        if cell.position[1] < 0.0:
-            cell.position[1] = 0.0
+        if cell.position[1] < lower:
+            cell.position[1] = lower
             cell.velocity[1] = 0.0
-        elif cell.position[1] > self.map_size:
-            cell.position[1] = self.map_size
+            cell.boost_velocity[1] = 0.0
+        elif cell.position[1] > upper:
+            cell.position[1] = upper
             cell.velocity[1] = 0.0
+            cell.boost_velocity[1] = 0.0
 
         cell.position = cell.position.astype(np.float32)
+
+    def _constrain_cells_to_bounds(self) -> None:
+        for cells in self.agents.values():
+            for cell in cells:
+                self._apply_boundary_collision(cell)
 
     def _try_split(self, agent_id: str, direction: np.ndarray) -> bool:
         cells = self.agents[agent_id]
@@ -364,7 +389,10 @@ class AgarioWorld:
         largest.mass = new_mass
         largest.split_cooldown = self.config.physics.split_cooldown_steps
         largest.merge_cooldown = self.config.physics.merge_cooldown_steps
-        largest.velocity = largest.velocity + direction * self.config.physics.split_boost
+        # Only the newly spawned piece gets the outward lunge; the original
+        # keeps its current velocity so the two visibly separate (Agar.io's
+        # split "shoots" one piece away from the other rather than moving
+        # both cells in lockstep at an identical boosted speed).
 
         new_position = largest.position + direction * (original_radius + 2.0)
         new_position = np.clip(new_position, 0.0, self.map_size).astype(np.float32)
@@ -372,11 +400,12 @@ class AgarioWorld:
             cell_id=self._new_cell_id(),
             agent_id=agent_id,
             position=new_position,
-            velocity=direction * self.config.physics.split_boost,
+            velocity=np.zeros(2, dtype=np.float32),
             mass=new_mass,
             split_cooldown=self.config.physics.split_cooldown_steps,
             merge_cooldown=self.config.physics.merge_cooldown_steps,
             eject_cooldown=0,
+            boost_velocity=(direction * self.config.physics.split_boost).astype(np.float32),
         )
         cells.append(new_cell)
         return True
@@ -436,13 +465,13 @@ class AgarioWorld:
         largest = max(cells, key=lambda c: c.mass)
         if largest.eject_cooldown > 0 or largest.mass <= self.config.physics.eject_mass_amount + 1.0:
             return
-        largest.mass -= self.config.physics.eject_mass_amount
-        largest.eject_cooldown = self.config.physics.eject_cooldown_steps
 
         norm = float(np.sqrt(np.sum(direction * direction)))
         if norm <= 1e-6:
             return
         direction = direction / norm
+        largest.mass -= self.config.physics.eject_mass_amount
+        largest.eject_cooldown = self.config.physics.eject_cooldown_steps
 
         pellet_position = largest.position + direction * (largest.radius(self.config.physics.radius_scale) + 2.0)
         pellet = Pellet(
@@ -688,6 +717,7 @@ class AgarioWorld:
             total_mass = sum(cell.mass for cell in cells)
             weighted_position = sum(cell.position * cell.mass for cell in cells) / max(total_mass, 1e-6)
             weighted_velocity = sum(cell.velocity * cell.mass for cell in cells) / max(total_mass, 1e-6)
+            weighted_boost = sum(cell.boost_velocity * cell.mass for cell in cells) / max(total_mass, 1e-6)
 
             merged = Cell(
                 cell_id=self._new_cell_id(),
@@ -698,6 +728,7 @@ class AgarioWorld:
                 split_cooldown=0,
                 merge_cooldown=0,
                 eject_cooldown=0,
+                boost_velocity=weighted_boost.astype(np.float32),
             )
             self.agents[agent_id] = [merged]
 
@@ -957,6 +988,7 @@ class AgarioWorld:
             pellet.position = np.clip(pellet.position * scale, 0.0, self.map_size).astype(np.float32)
         self._respawn_pellets(force_full=False)
         self._sync_prev_cell_positions()
+        self._center_cache = {}
 
     def _agent_total_mass(self, agent_id: str) -> float:
         return float(sum(cell.mass for cell in self.agents[agent_id]))
@@ -967,13 +999,27 @@ class AgarioWorld:
             return None
         return max(cells, key=lambda c: c.mass)
 
+    def agent_center(self, agent_id: str) -> np.ndarray:
+        """Public, cached accessor for an agent's mass-weighted center."""
+        return self._agent_center(agent_id)
+
     def _agent_center(self, agent_id: str) -> np.ndarray:
+        if self._center_cache_step != self.step_count:
+            self._center_cache = {}
+            self._center_cache_step = self.step_count
+        cached = self._center_cache.get(agent_id)
+        if cached is not None:
+            return cached
+
         cells = self.agents[agent_id]
         if not cells:
-            return np.array([self.map_size * 0.5, self.map_size * 0.5], dtype=np.float32)
-        masses = np.array([cell.mass for cell in cells], dtype=np.float32)
-        stacked = np.stack([cell.position for cell in cells], axis=0)
-        return (stacked * masses[:, None]).sum(axis=0) / max(float(masses.sum()), 1e-6)
+            center = np.array([self.map_size * 0.5, self.map_size * 0.5], dtype=np.float32)
+        else:
+            masses = np.array([cell.mass for cell in cells], dtype=np.float32)
+            stacked = np.stack([cell.position for cell in cells], axis=0)
+            center = (stacked * masses[:, None]).sum(axis=0) / max(float(masses.sum()), 1e-6)
+        self._center_cache[agent_id] = center
+        return center
 
     def _nearest_relation(
         self,
@@ -1116,12 +1162,13 @@ class AgarioWorld:
             assert largest is not None
             total_mass = self._agent_total_mass(agent_id)
             speed_norm = self.config.physics.base_speed + self.config.physics.split_boost + 1e-6
+            observed_velocity = largest.total_velocity()
             obs[cursor : cursor + 8] = np.array(
                 [
                     largest.position[0] / self.map_size,
                     largest.position[1] / self.map_size,
-                    largest.velocity[0] / speed_norm,
-                    largest.velocity[1] / speed_norm,
+                    observed_velocity[0] / speed_norm,
+                    observed_velocity[1] / speed_norm,
                     self._norm_mass(total_mass),
                     len(cells) / max(1.0, float(self.config.physics.max_cells_per_agent)),
                     largest.split_cooldown / max(1.0, float(self.config.physics.split_cooldown_steps)),

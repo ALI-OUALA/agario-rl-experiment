@@ -19,9 +19,14 @@ class Cell:
     split_cooldown: int = 0
     merge_cooldown: int = 0
     eject_cooldown: int = 0
+    boost_velocity: np.ndarray = field(default_factory=lambda: np.zeros(2, dtype=np.float32))
 
     def radius(self, radius_scale: float) -> float:
         return radius_scale * float(np.sqrt(max(self.mass, 0.01)))
+
+    def total_velocity(self) -> np.ndarray:
+        """Steering velocity plus any decaying split/eject impulse."""
+        return self.velocity + self.boost_velocity
 
 
 @dataclass(slots=True)

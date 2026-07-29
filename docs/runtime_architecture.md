@@ -51,7 +51,8 @@ Browser input:
 {
   "type": "input",
   "steer": { "x": 1.0, "y": 0.0 },
-  "split": false
+  "split": false,
+  "eject": false
 }
 ```
 
@@ -79,7 +80,9 @@ Canvas responsibilities:
 - draw the full arena, grid, world bounds, pellets, viruses, ejected mass, and
   cells
 - interpolate between frames for smoother movement
-- follow the human player or leading agent with camera smoothing
+- follow the human player or leading agent with refresh-rate-independent camera
+  smoothing
+- cull off-screen pellets and batch visible pellets by color
 - draw edge indicators for off-screen threats and targets
 - draw the minimap and viewport rectangle
 
@@ -92,7 +95,14 @@ DOM responsibilities:
 - human-readiness counters
 - runtime FPS and connection status
 
-This separation keeps text readable while leaving the playfield responsive.
+HUD writes are throttled separately from the display-rate canvas loop. This
+separation keeps text readable without forcing DOM layout work every frame.
+
+Mode changes replace the active WebSocket. Callbacks from the retired socket
+are ignored, so its delayed `close` event cannot tear down the new connection.
+Unexpected disconnects retry with bounded exponential backoff. The server uses
+deadline-based 30 Hz pacing and awaits receiver-task cancellation during
+cleanup, preventing timing drift and orphaned receive loops.
 
 ## Training boundary
 

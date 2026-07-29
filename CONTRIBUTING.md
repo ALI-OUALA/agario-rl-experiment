@@ -28,8 +28,8 @@ npm run build
   input transport.
 - Update tests when you change world rules, training behavior, browser frame
   schema, WebSocket input, or public CLI flags.
-- Update `README.md`, `AGENTS.md`, and `docs/` when you change workflows,
-  telemetry, controls, or config semantics.
+- Update `README.md` and `docs/` when you change workflows, telemetry, controls,
+  or config semantics.
 - Keep logs, checkpoints, and generated report assets out of routine code
   changes unless the task explicitly asks for a fresh experiment run.
 
@@ -57,7 +57,7 @@ npm run build
 Docs whitespace:
 
 ```powershell
-git diff --check -- README.md CONTRIBUTING.md AGENTS.md docs
+git diff --check -- README.md CONTRIBUTING.md docs
 ```
 
 ## Pull request expectations

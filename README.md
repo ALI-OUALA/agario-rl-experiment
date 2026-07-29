@@ -1,26 +1,41 @@
-# Agario RL Experiment
+# Agario RL
 
-A deterministic Agar.io-style reinforcement-learning lab with a Python simulator, PPO training, FastAPI/WebSockets, and a Vite/TypeScript browser client.
+A small Agar.io-style reinforcement-learning experiment you can watch, play,
+train, and evaluate on your own machine.
 
-> The project trains agents inside a local `AgarioWorld` simulator. It does not automate or wrap the public Agar.io website.
+The game does not control or scrape the public Agar.io website. It runs inside a
+deterministic Python simulator, while a TypeScript canvas app renders the live
+world in your browser.
 
-## At a glance
+![Agario RL training metrics](docs/assets/training-summary.png)
 
-| Area | Implementation |
-| --- | --- |
-| Environment | Deterministic multi-agent Agar.io-style simulator |
-| Learning | Shared PPO trainer with scripted and checkpoint opponents |
-| Runtime | FastAPI + WebSockets |
-| Frontend | Vite, TypeScript, Canvas |
-| Modes | Showcase, human play, and training telemetry |
+## Try the game
 
-## Run the browser experiment
+You need Python 3.11 or newer and Node.js.
 
 ```powershell
+python -m venv .venv
+.\.venv\Scripts\Activate.ps1
+python -m pip install -e .[dev]
 python scripts/run_game.py
 ```
 
-Useful modes:
+The game opens at `http://127.0.0.1:5173/`.
+
+Choose a mode:
+
+- **Showcase** — watch bots compete.
+- **Play** — control the blue cell with the mouse or arrow keys.
+- **Training view** — watch the arena with learning telemetry visible.
+
+In Play mode:
+
+- move the mouse or use the arrow keys to steer
+- press **Space** to split
+- press **W** to eject mass
+- press **R** to reset the arena
+
+You can also start a mode directly:
 
 ```powershell
 python scripts/run_game.py --mode showcase
@@ -28,127 +43,120 @@ python scripts/run_game.py --mode play
 python scripts/run_game.py --mode training-view
 ```
 
-Open `http://127.0.0.1:5173/` if the browser does not open automatically.
+## What you are looking at
 
-- `showcase`: bot-vs-bot full arena with no checkpoint or log writes.
-- `play`: human controls `agent_0` with mouse steering and Space split.
-- `training-view`: live arena with training and human-readiness telemetry.
+Python owns the game rules. It moves cells, resolves collisions, calculates
+rewards, and chooses bot actions. The browser receives snapshots over a
+WebSocket and draws them smoothly between simulator steps.
 
-## Train agents
+On screen:
 
-Baseline training:
+- colored circles are players
+- small dots are food pellets
+- green spiked circles are viruses
+- arrows point toward important off-screen threats and targets
+- the minimap shows the full arena
+- the side panels show mass, population, policy source, training update, split
+  safety, and runtime FPS
+
+This separation keeps training reproducible: browser rendering cannot change
+the world or the reward calculation.
+
+## Current results
+
+The repository contains two 20-episode human-readiness evaluations. The
+human-ready checkpoint survived longer and applied more pressure to smaller
+targets, but it finished with much less mass, spent more time in corners, and
+neither checkpoint won an episode.
+
+![Human-readiness evaluation comparison](docs/assets/eval-comparison.png)
+
+| Metric | Baseline update 500 | Human-ready update 80 |
+| --- | ---: | ---: |
+| Win rate | 0% | 0% |
+| Mean survival | 448.00 steps | 502.65 steps |
+| Mean final mass | 96.88 | 14.00 |
+| Time in corners | 59.46% | 64.14% |
+| Threat avoidance | 20.53% | 24.77% |
+| Small-target pressure | 20.00% | 100.00% |
+
+These are proxy metrics, not proof that the policy is ready to play well with a
+person. See [experiment results](docs/experiment-results.md) for the full
+interpretation and data coverage.
+
+## Train a policy
+
+Run the classic setup:
 
 ```powershell
 python scripts/train.py --updates 20 --device auto
 ```
 
-Recommended human-ready training path:
+Run the mixed-opponent setup:
 
 ```powershell
 python scripts/train_human_ready.py --updates 80 --device auto
 ```
 
-Scenario-curriculum training:
+Run the richer curriculum:
 
 ```powershell
 python scripts/train.py --updates 20 --scenario-preset agario_curriculum --continuing-respawn --device auto
 ```
 
-Training writes CSV metrics and checkpoints. The browser game reads those metrics for visibility but does not write checkpoints unless a training command is running.
+Training writes checkpoints under `checkpoints/` and metrics under `logs/`.
+`--device auto` selects CPU, CUDA, or Intel XPU support when available.
 
-## Evaluate agents
+## Evaluate a checkpoint
 
 ```powershell
 python scripts/eval.py --checkpoint checkpoints/latest.pt --episodes 5 --deterministic --device auto
+python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 20
 ```
 
-Human-readiness evaluation:
+Report the checkpoint, episode count, scenario, seed, and exact command whenever
+you compare runs. A lower PPO loss alone does not mean better gameplay.
+
+## Regenerate the charts
 
 ```powershell
-python scripts/eval_human_readiness.py --checkpoint checkpoints/human_ready_v1/latest.pt --episodes 5
+python scripts/generate_report_assets.py
 ```
 
-## Install
+The script reads the tracked CSV and JSON results and replaces the three images
+under `docs/assets/`.
 
-Python:
+![Training log coverage](docs/assets/update-coverage.png)
 
-```powershell
-python -m venv .venv
-.\.venv\Scripts\Activate.ps1
-python -m pip install -e .[dev]
+## Project map
+
+```text
+agario_rl/env/       simulator, observations, rewards
+agario_rl/rl/        PPO networks, buffers, trainer
+agario_rl/web/       FastAPI, WebSocket runtime, frame format
+web/                 browser canvas frontend
+scripts/             run, train, evaluate, benchmark, chart tools
+tests/               simulator, training, and browser-runtime tests
+docs/                setup, controls, architecture, and results
 ```
 
-Node.js is required for the Vite frontend. `scripts/run_game.py` runs `npm install` inside `web/` on first launch unless `--skip-npm-install` is set.
+Useful reading:
 
-Optional Intel Arc / XPU wheels:
+- [Quickstart](docs/quickstart.md)
+- [How the policy learns](docs/how_it_learns.md)
+- [Controls and tuning](docs/controls_and_tuning.md)
+- [Runtime architecture](docs/runtime_architecture.md)
+- [Experiment results](docs/experiment-results.md)
 
-```powershell
-python -m pip install torch torchvision torchaudio --index-url https://download.pytorch.org/whl/xpu
-```
-
-## What is happening on screen
-
-- Colored cells are agents. In `play` mode, `You` is the human-controlled cell.
-- Pellets are small food dots. Agents grow by eating pellets and smaller cells.
-- Viruses are green spiked hazards. Large cells must route around them.
-- Ejected mass appears as small blue pieces when the simulator enables ejects.
-- Edge arrows show off-screen threats and targets.
-- The minimap shows the full arena, all agents, viruses, and camera window.
-- Training panels show scenario, update count, active checkpoint, split safety, useful and unsafe splits, FPS, and current population.
-
-## Architecture
-
-- `agario_rl/env/`: world rules, collisions, observations, rewards, respawn, and the multi-agent environment wrapper.
-- `agario_rl/rl/`: PPO trainer, networks, buffers, and async utilities.
-- `agario_rl/opponents.py`: scripted and checkpoint-backed opponent policies.
-- `agario_rl/web/`: FastAPI app, WebSocket session runtime, and frame serialization.
-- `web/`: Vite + TypeScript canvas frontend.
-- `scripts/run_game.py`: starts the API and browser dev server together.
-- `scripts/train.py`: baseline and scenario-curriculum PPO training.
-- `scripts/train_human_ready.py`: mixed-opponent training path.
-- `scripts/eval.py` and `scripts/eval_human_readiness.py`: checkpoint evaluation.
-- `docs/`: quickstart, architecture, controls, tuning, learning notes, and experiment reports.
-
-## Human-ready training goal
-
-The reward and UI focus is survival-quality behavior, not simply splitting often. The recommended training path mixes checkpoint opponents with scripted foragers, evaders, hunters, and objective-driven bots.
-
-The visible counters emphasize:
-
-- safe survival near larger threats
-- useful split attacks only when the target is catchable
-- penalties for unsafe splits and deaths after bad splits
-- target pressure without chasing into corners or viruses
-- continuing-respawn quality
-
-## Verification
-
-Fast checks:
-
-```powershell
-.\.venv\Scripts\python.exe -m pytest tests\test_browser_runtime.py tests\test_simulator_upgrade.py tests\test_scenario_training_smoke.py
-```
-
-Full Python suite:
+## Verify the project
 
 ```powershell
 .\.venv\Scripts\python.exe -m pytest
-```
-
-Frontend build:
-
-```powershell
 cd web
 npm install
 npm run build
 ```
 
-Browser smoke target:
-
-```powershell
-python scripts/run_game.py --mode play
-```
-
-Then inspect `http://127.0.0.1:5173/?mode=play`.
-
-For the complete project narrative and readiness checklist, read [`docs/project_story_and_readiness.md`](docs/project_story_and_readiness.md).
+The project is an experiment, not a production game service. Its strongest
+property is that the simulator, training loop, evaluation data, and browser
+view are all local and inspectable.

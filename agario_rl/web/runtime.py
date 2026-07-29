@@ -25,6 +25,7 @@ class BrowserInput:
     steer_x: float = 0.0
     steer_y: float = 0.0
     split: bool = False
+    eject: bool = False
 
     def as_action(self) -> np.ndarray:
         steer = np.array([self.steer_x, self.steer_y], dtype=np.float32)
@@ -137,6 +138,7 @@ class BrowserGameSession:
         if isinstance(steer, dict):
             self.input.update_steer(steer.get("x", 0.0), steer.get("y", 0.0))
         self.input.split = self.input.split or bool(message.get("split", False))
+        self.input.eject = self.input.eject or bool(message.get("eject", False))
 
     def reset(self) -> None:
         self.observations = self.env.reset(seed=self.config.seed + self.tick + 1)
@@ -174,7 +176,11 @@ class BrowserGameSession:
         """Advance one browser frame and return a serialized frame."""
         actions = self._opponent_step_actions()
         if self.player_id is not None:
-            actions[self.player_id] = self.input.as_action()
+            player_action = self.input.as_action()
+            if self.input.eject:
+                self.env.world.eject_mass(self.player_id, player_action[:2])
+                self.input.eject = False
+            actions[self.player_id] = player_action
 
         latest_infos = self.env.last_infos
         for _ in range(self.substeps):

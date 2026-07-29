@@ -35,7 +35,7 @@ type BrowserFrame = {
   playerId: string | null;
   agents: Agent[];
   leaderboard: Array<{ id: string; name: string; mass: number; color: string }>;
-  pellets: Array<{ id: string | number; x: number; y: number; mass: number }>;
+  pellets: { x: number[]; y: number[]; mass: number[] };
   viruses: Array<{ id: string | number; x: number; y: number; mass: number; radius: number; fed: number }>;
   ejected: Array<{ id: string | number; ownerId: string; x: number; y: number; mass: number }>;
   training: {
@@ -94,12 +94,16 @@ let socket: WebSocket | null = null;
 let frame: BrowserFrame | null = null;
 let previousFrame: BrowserFrame | null = null;
 let lastFrameAt = performance.now();
+let frameIntervalEstimate = 34;
+let lastRenderAt = performance.now();
+let lastHudUpdateAt = 0;
+let leaderboardHtml = "";
 let reconnectTimer = 0;
+let reconnectAttempt = 0;
 let pointer = { x: 0, y: 0, active: false };
 let keyboard = { x: 0, y: 0 };
 let smoothedSteer: Vec2 = { x: 0, y: 0 };
 let lastInputAt = 0;
-let pendingSplit = false;
 let camera = { x: 500, y: 500, zoom: 1 };
 let currentMode = new URLSearchParams(location.search).get("mode") ?? defaultMode;
 
@@ -111,38 +115,61 @@ elements.modeSelect.value = currentMode;
 
 function connect() {
   clearTimeout(reconnectTimer);
-  socket?.close();
+  const previousSocket = socket;
+  socket = null;
+  previousSocket?.close();
   const checkpoint = encodeURIComponent(defaultCheckpoint);
-  const url = `ws://127.0.0.1:${apiPort}/ws?mode=${encodeURIComponent(currentMode)}&checkpoint=${checkpoint}`;
-  socket = new WebSocket(url);
+  const protocol = location.protocol === "https:" ? "wss" : "ws";
+  const url = `${protocol}://${location.hostname}:${apiPort}/ws?mode=${encodeURIComponent(currentMode)}&checkpoint=${checkpoint}`;
+  const nextSocket = new WebSocket(url);
+  socket = nextSocket;
   elements.status.textContent = "Connecting";
 
-  socket.addEventListener("open", () => {
+  nextSocket.addEventListener("open", () => {
+    if (socket !== nextSocket) return;
+    reconnectAttempt = 0;
     elements.status.textContent = "Live";
   });
 
-  socket.addEventListener("message", (event) => {
+  nextSocket.addEventListener("message", (event) => {
+    if (socket !== nextSocket) return;
     const parsed = JSON.parse(event.data) as BrowserFrame;
     if (parsed.type !== "frame") {
       return;
     }
     previousFrame = frame;
     frame = parsed;
-    lastFrameAt = performance.now();
-    updateHud(parsed);
+    const now = performance.now();
+    const observedInterval = now - lastFrameAt;
+    if (observedInterval > 5 && observedInterval < 500) {
+      // Track actual server frame spacing so interpolation keeps gliding
+      // for the full gap between frames instead of assuming a fixed 30Hz
+      // and sitting frozen once that fixed window elapses.
+      frameIntervalEstimate = lerp(frameIntervalEstimate, observedInterval, 0.25);
+    }
+    lastFrameAt = now;
+    if (now - lastHudUpdateAt >= 200) {
+      updateHud(parsed);
+      lastHudUpdateAt = now;
+    }
   });
 
-  socket.addEventListener("close", () => {
+  nextSocket.addEventListener("close", () => {
+    if (socket !== nextSocket) return;
+    socket = null;
     elements.status.textContent = "Reconnecting";
-    reconnectTimer = window.setTimeout(connect, 900);
+    const delay = Math.min(500 * 2 ** reconnectAttempt, 4000);
+    reconnectAttempt += 1;
+    reconnectTimer = window.setTimeout(connect, delay);
   });
 
-  socket.addEventListener("error", () => {
+  nextSocket.addEventListener("error", () => {
+    if (socket !== nextSocket) return;
     elements.status.textContent = "Socket error";
   });
 }
 
-function sendInput(split = false, force = false) {
+function sendInput(split = false, force = false, eject = false) {
   if (!socket || socket.readyState !== WebSocket.OPEN || !frame || currentMode !== "play") {
     return;
   }
@@ -152,7 +179,7 @@ function sendInput(split = false, force = false) {
   }
   lastInputAt = now;
   const steer = currentSteer();
-  socket.send(JSON.stringify({ type: "input", steer, split }));
+  socket.send(JSON.stringify({ type: "input", steer, split, eject }));
 }
 
 function currentSteer(): Vec2 {
@@ -192,7 +219,7 @@ function screenToSteer(x: number, y: number): Vec2 {
 }
 
 function resizeCanvas() {
-  const ratio = window.devicePixelRatio || 1;
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
   const width = window.innerWidth;
   const height = window.innerHeight;
   canvas.width = Math.floor(width * ratio);
@@ -211,13 +238,17 @@ function pointerFromEvent(event: PointerEvent): Vec2 {
 }
 
 function updateHud(next: BrowserFrame) {
-  elements.leaderboard.innerHTML = next.leaderboard
+  const nextLeaderboardHtml = next.leaderboard
     .slice(0, 7)
     .map(
       (item) =>
         `<li><span style="--agent-color:${item.color}">${escapeText(item.name)}</span><strong>${item.mass.toFixed(0)}</strong></li>`,
     )
     .join("");
+  if (nextLeaderboardHtml !== leaderboardHtml) {
+    elements.leaderboard.innerHTML = nextLeaderboardHtml;
+    leaderboardHtml = nextLeaderboardHtml;
+  }
   elements.scenario.textContent = next.scenario;
   elements.updateCount.textContent = String(next.training.updateCount || 0);
   elements.policySource.textContent = next.training.policySource;
@@ -228,7 +259,7 @@ function updateHud(next: BrowserFrame) {
   elements.leaderMass.textContent = next.training.humanReadiness.finalMassLeader.toFixed(0);
   elements.fps.textContent = next.fps.toFixed(0);
   elements.agentCount.textContent = String(next.agents.filter((agent) => agent.alive).length);
-  elements.pelletCount.textContent = String(next.pellets.length);
+  elements.pelletCount.textContent = String(next.pellets.x.length);
 }
 
 function shortCheckpoint(path: string) {
@@ -259,21 +290,68 @@ function cellPosition(cell: Cell, agentId: string, alpha: number): Vec2 {
   return { x: lerp(oldCell.x, cell.x, alpha), y: lerp(oldCell.y, cell.y, alpha) };
 }
 
-function updateCamera(snapshot: BrowserFrame, alpha: number) {
-  const playerFocus = snapshot.playerId ? snapshot.agents.find((agent) => agent.id === snapshot.playerId) : undefined;
-  const leaderFocus =
-    snapshot.leaderboard.length > 0
-      ? snapshot.agents.find((agent) => agent.id === snapshot.leaderboard[0]?.id)
-      : undefined;
-  const focus = playerFocus ?? leaderFocus ?? snapshot.agents[0];
+let cameraFocusId: string | null = null;
+let cameraFocusHoldFrames = 0;
+const CAMERA_SWITCH_HOLD_FRAMES = 90;
+const CAMERA_SWITCH_LEAD_RATIO = 1.15;
+
+function resetCameraFocus() {
+  cameraFocusId = null;
+  cameraFocusHoldFrames = 0;
+}
+
+function pickCameraFocus(snapshot: BrowserFrame): Agent | undefined {
+  if (snapshot.playerId) {
+    const player = snapshot.agents.find((agent) => agent.id === snapshot.playerId);
+    if (player && player.alive) {
+      cameraFocusId = player.id;
+      return player;
+    }
+  }
+
+  const aliveAgents = snapshot.agents.filter((agent) => agent.alive);
+  if (aliveAgents.length === 0) {
+    return snapshot.agents[0];
+  }
+  const topAgent = aliveAgents.reduce((best, agent) => (agent.totalMass > best.totalMass ? agent : best));
+  const current = cameraFocusId ? aliveAgents.find((agent) => agent.id === cameraFocusId) : undefined;
+
+  if (!current) {
+    cameraFocusId = topAgent.id;
+    cameraFocusHoldFrames = CAMERA_SWITCH_HOLD_FRAMES;
+    return topAgent;
+  }
+  if (current.id === topAgent.id) {
+    return current;
+  }
+  // Debounce: require the new leader to hold a clear mass lead for a while
+  // before stealing camera focus, otherwise near-tied masses cause the
+  // camera to snap back and forth between agents every frame.
+  if (cameraFocusHoldFrames > 0) {
+    cameraFocusHoldFrames -= 1;
+    return current;
+  }
+  if (topAgent.totalMass >= current.totalMass * CAMERA_SWITCH_LEAD_RATIO) {
+    cameraFocusId = topAgent.id;
+    cameraFocusHoldFrames = CAMERA_SWITCH_HOLD_FRAMES;
+    return topAgent;
+  }
+  return current;
+}
+
+function updateCamera(snapshot: BrowserFrame, alpha: number, elapsedMs: number) {
+  const focus = pickCameraFocus(snapshot);
   if (!focus) {
     return;
   }
   const center = interpolatedAgentCenter(focus, alpha);
   const targetZoom = Math.max(0.34, Math.min(1.18, 46 / Math.sqrt(Math.max(focus.totalMass, 24))));
-  camera.x = lerp(camera.x, center.x, 0.11);
-  camera.y = lerp(camera.y, center.y, 0.11);
-  camera.zoom = lerp(camera.zoom, targetZoom, 0.06);
+  const elapsedSeconds = Math.min(elapsedMs, 50) / 1000;
+  const positionBlend = 1 - Math.exp(-7 * elapsedSeconds);
+  const zoomBlend = 1 - Math.exp(-3.7 * elapsedSeconds);
+  camera.x = lerp(camera.x, center.x, positionBlend);
+  camera.y = lerp(camera.y, center.y, positionBlend);
+  camera.zoom = lerp(camera.zoom, targetZoom, zoomBlend);
 }
 
 function interpolatedAgentCenter(agent: Agent, alpha: number): Vec2 {
@@ -294,61 +372,104 @@ function worldToScreen(pos: Vec2): Vec2 {
   };
 }
 
-function draw() {
+function draw(timestamp: number) {
   requestAnimationFrame(draw);
+  ensureCanvasSize();
   if (!frame) {
     drawLoading();
     return;
   }
-  const alpha = Math.min((performance.now() - lastFrameAt) / 34, 1);
-  updateCamera(frame, alpha);
-  drawArena(frame);
+  const elapsedMs = timestamp - lastRenderAt;
+  lastRenderAt = timestamp;
+  const alpha = Math.min((timestamp - lastFrameAt) / frameIntervalEstimate, 1);
+  updateCamera(frame, alpha, elapsedMs);
+  drawArena(frame, alpha);
   drawMinimap(frame);
-  sendInput(pendingSplit);
-  pendingSplit = false;
+  sendInput();
+}
+
+function ensureCanvasSize() {
+  const ratio = Math.min(window.devicePixelRatio || 1, 2);
+  const width = window.innerWidth;
+  const height = window.innerHeight;
+  if (width <= 0 || height <= 0) {
+    return;
+  }
+  const expectedWidth = Math.floor(width * ratio);
+  const expectedHeight = Math.floor(height * ratio);
+  if (canvas.width !== expectedWidth || canvas.height !== expectedHeight) {
+    resizeCanvas();
+  }
 }
 
 function drawLoading() {
-  ctx.fillStyle = "#091017";
-  ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-  ctx.fillStyle = "#d7f7ff";
-  ctx.font = "600 18px Inter, system-ui, sans-serif";
-  ctx.fillText("Connecting to Python simulation...", 32, 48);
+  const width = canvas.clientWidth || window.innerWidth;
+  const height = canvas.clientHeight || window.innerHeight;
+  ctx.fillStyle = BACKGROUND_COLOR;
+  ctx.fillRect(0, 0, width, height);
+  drawGridPattern(width, height);
+  ctx.fillStyle = "#4a5a68";
+  ctx.font = "600 20px Inter, system-ui, sans-serif";
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.fillText("Connecting to Python simulation...", width * 0.5, height * 0.5);
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
 }
 
-function drawArena(snapshot: BrowserFrame) {
-  ctx.fillStyle = "#f7fbf8";
+function drawArena(snapshot: BrowserFrame, alpha: number) {
+  ctx.fillStyle = BACKGROUND_COLOR;
   ctx.fillRect(0, 0, canvas.clientWidth, canvas.clientHeight);
-  drawGrid(snapshot.mapSize);
+  drawGridPattern(canvas.clientWidth, canvas.clientHeight);
   drawWorldBounds(snapshot.mapSize);
 
-  for (const pellet of snapshot.pellets) {
-    const p = worldToScreen(pellet);
-    const radius = Math.max(2.2, Math.sqrt(pellet.mass) * 1.15 * camera.zoom);
-    ctx.beginPath();
-    ctx.fillStyle = pelletColor(pellet.id);
-    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
-    ctx.fill();
+  const agentColorById = new Map(snapshot.agents.map((agent) => [agent.id, agent.color] as const));
+
+  const pelletXs = snapshot.pellets.x;
+  const pelletYs = snapshot.pellets.y;
+  const pelletMasses = snapshot.pellets.mass;
+  const pelletPaths = PELLET_PALETTE.map(() => new Path2D());
+  const populatedPaths = new Array(PELLET_PALETTE.length).fill(false) as boolean[];
+  for (let i = 0; i < pelletXs.length; i += 1) {
+    const p = worldToScreen({ x: pelletXs[i], y: pelletYs[i] });
+    const radius = Math.max(2.4, Math.sqrt(pelletMasses[i]) * 1.5 * camera.zoom);
+    if (p.x < -radius || p.x > canvas.clientWidth + radius || p.y < -radius || p.y > canvas.clientHeight + radius) {
+      continue;
+    }
+    const colorIndex = pelletColorIndex(pelletXs[i], pelletYs[i]);
+    pelletPaths[colorIndex].moveTo(p.x + radius, p.y);
+    pelletPaths[colorIndex].arc(p.x, p.y, radius, 0, Math.PI * 2);
+    populatedPaths[colorIndex] = true;
+  }
+  for (let i = 0; i < pelletPaths.length; i += 1) {
+    if (populatedPaths[i]) {
+      ctx.fillStyle = PELLET_PALETTE[i];
+      ctx.fill(pelletPaths[i]);
+    }
   }
 
   for (const ejected of snapshot.ejected) {
     const p = worldToScreen(ejected);
+    const radius = Math.max(3.5, 5.5 * camera.zoom);
+    const color = agentColorById.get(ejected.ownerId) ?? "#cfd6dc";
     ctx.beginPath();
-    ctx.fillStyle = "#7fd6ff";
-    ctx.arc(p.x, p.y, Math.max(3.2, 5 * camera.zoom), 0, Math.PI * 2);
+    ctx.fillStyle = color;
+    ctx.strokeStyle = shade(color, -30);
+    ctx.lineWidth = Math.max(1, radius * 0.12);
+    ctx.arc(p.x, p.y, radius, 0, Math.PI * 2);
     ctx.fill();
+    ctx.stroke();
   }
 
   for (const virus of snapshot.viruses) {
     const p = worldToScreen(virus);
-    drawVirus(p.x, p.y, Math.max(10, virus.radius * camera.zoom));
+    drawVirus(p.x, p.y, Math.max(12, virus.radius * camera.zoom));
   }
 
-  const alpha = Math.min((performance.now() - lastFrameAt) / 34, 1);
   for (const agent of snapshot.agents) {
     for (const cell of agent.cells) {
       const p = worldToScreen(cellPosition(cell, agent.id, alpha));
-      drawCell(p.x, p.y, Math.max(5, cell.radius * camera.zoom), agent);
+      drawCell(p.x, p.y, Math.max(6, cell.radius * camera.zoom), agent);
     }
   }
 
@@ -364,77 +485,90 @@ function drawArena(snapshot: BrowserFrame) {
   drawCursor();
 }
 
-function drawGrid(mapSize: number) {
-  const grid = 80 * camera.zoom;
-  const offsetX = ((-camera.x * camera.zoom + canvas.clientWidth * 0.5) % grid) - grid;
-  const offsetY = ((-camera.y * camera.zoom + canvas.clientHeight * 0.5) % grid) - grid;
-  ctx.strokeStyle = "rgba(80, 98, 112, 0.15)";
+const BACKGROUND_COLOR = "#f2f4f7";
+const GRID_LINE_COLOR = "rgba(50, 70, 90, 0.08)";
+const GRID_WORLD_SPACING = 50;
+
+function drawGridPattern(width: number, height: number) {
+  const grid = GRID_WORLD_SPACING * camera.zoom;
+  if (grid < 4) {
+    return;
+  }
+  const offsetX = ((-camera.x * camera.zoom + width * 0.5) % grid) - grid;
+  const offsetY = ((-camera.y * camera.zoom + height * 0.5) % grid) - grid;
+  ctx.strokeStyle = GRID_LINE_COLOR;
   ctx.lineWidth = 1;
-  for (let x = offsetX; x < canvas.clientWidth + grid; x += grid) {
-    ctx.beginPath();
+  ctx.beginPath();
+  for (let x = offsetX; x < width + grid; x += grid) {
     ctx.moveTo(x, 0);
-    ctx.lineTo(x, canvas.clientHeight);
-    ctx.stroke();
+    ctx.lineTo(x, height);
   }
-  for (let y = offsetY; y < canvas.clientHeight + grid; y += grid) {
-    ctx.beginPath();
+  for (let y = offsetY; y < height + grid; y += grid) {
     ctx.moveTo(0, y);
-    ctx.lineTo(canvas.clientWidth, y);
-    ctx.stroke();
+    ctx.lineTo(width, y);
   }
-  ctx.fillStyle = "rgba(24, 45, 60, 0.08)";
-  ctx.font = "12px Inter, system-ui, sans-serif";
-  ctx.fillText(`${mapSize.toFixed(0)} x ${mapSize.toFixed(0)} arena`, 18, canvas.clientHeight - 24);
+  ctx.stroke();
 }
 
 function drawWorldBounds(mapSize: number) {
   const a = worldToScreen({ x: 0, y: 0 });
   const b = worldToScreen({ x: mapSize, y: mapSize });
-  ctx.strokeStyle = "rgba(22, 38, 52, 0.55)";
+  ctx.strokeStyle = "rgba(60, 70, 82, 0.5)";
   ctx.lineWidth = 2;
+  ctx.setLineDash([12, 9]);
   ctx.strokeRect(a.x, a.y, b.x - a.x, b.y - a.y);
+  ctx.setLineDash([]);
 }
 
 function drawCell(x: number, y: number, radius: number, agent: Agent) {
-  const gradient = ctx.createRadialGradient(x - radius * 0.28, y - radius * 0.35, radius * 0.1, x, y, radius);
-  gradient.addColorStop(0, "#ffffff");
-  gradient.addColorStop(0.18, agent.color);
-  gradient.addColorStop(1, shade(agent.color, -32));
   ctx.beginPath();
-  ctx.fillStyle = gradient;
-  ctx.strokeStyle = "rgba(255, 255, 255, 0.96)";
-  ctx.lineWidth = Math.max(2, radius * 0.07);
+  ctx.fillStyle = agent.color;
   ctx.arc(x, y, radius, 0, Math.PI * 2);
   ctx.fill();
+  ctx.strokeStyle = shade(agent.color, -38);
+  ctx.lineWidth = Math.max(2, radius * 0.09);
   ctx.stroke();
 
-  if (radius > 16) {
-    ctx.fillStyle = "rgba(11, 20, 30, 0.74)";
-    ctx.font = "700 13px Inter, system-ui, sans-serif";
-    ctx.textAlign = "center";
-    ctx.textBaseline = "middle";
-    ctx.fillText(agent.name, x, y);
-    ctx.textAlign = "start";
+  if (radius > 13) {
+    const nameSize = Math.max(11, Math.min(22, radius * 0.34));
+    drawOutlinedText(agent.name, x, y - (radius > 26 ? nameSize * 0.42 : 0), nameSize);
+    if (radius > 26) {
+      const massSize = Math.max(9, nameSize * 0.7);
+      drawOutlinedText(Math.round(agent.totalMass).toString(), x, y + massSize * 0.7, massSize);
+    }
   }
+}
+
+function drawOutlinedText(text: string, x: number, y: number, size: number) {
+  ctx.font = `700 ${size}px Inter, system-ui, sans-serif`;
+  ctx.textAlign = "center";
+  ctx.textBaseline = "middle";
+  ctx.lineWidth = Math.max(2, size * 0.22);
+  ctx.strokeStyle = "rgba(0, 0, 0, 0.55)";
+  ctx.strokeText(text, x, y);
+  ctx.fillStyle = "#ffffff";
+  ctx.fillText(text, x, y);
+  ctx.textAlign = "start";
+  ctx.textBaseline = "alphabetic";
 }
 
 function drawVirus(x: number, y: number, radius: number) {
   ctx.save();
   ctx.translate(x, y);
   ctx.beginPath();
-  const spikes = 20;
+  const spikes = 24;
   for (let i = 0; i < spikes; i += 1) {
     const angle = (i / spikes) * Math.PI * 2;
-    const r = i % 2 === 0 ? radius * 1.16 : radius * 0.86;
+    const r = i % 2 === 0 ? radius * 1.14 : radius * 0.84;
     const px = Math.cos(angle) * r;
     const py = Math.sin(angle) * r;
     if (i === 0) ctx.moveTo(px, py);
     else ctx.lineTo(px, py);
   }
   ctx.closePath();
-  ctx.fillStyle = "#20c86d";
-  ctx.strokeStyle = "#107b44";
-  ctx.lineWidth = 2;
+  ctx.fillStyle = "#33ff33";
+  ctx.strokeStyle = "#1fae1f";
+  ctx.lineWidth = 3;
   ctx.fill();
   ctx.stroke();
   ctx.restore();
@@ -489,14 +623,15 @@ function drawCursor() {
 function drawMinimap(snapshot: BrowserFrame) {
   const size = minimap.width;
   miniCtx.clearRect(0, 0, size, size);
-  miniCtx.fillStyle = "rgba(250, 253, 250, 0.82)";
+  miniCtx.fillStyle = "rgba(242, 244, 247, 0.9)";
   miniCtx.fillRect(0, 0, size, size);
   miniCtx.strokeStyle = "rgba(22, 35, 47, 0.35)";
   miniCtx.strokeRect(0.5, 0.5, size - 1, size - 1);
   const scale = size / snapshot.mapSize;
-  for (const pellet of snapshot.pellets.slice(0, 120)) {
-    miniCtx.fillStyle = "rgba(83, 107, 122, 0.22)";
-    miniCtx.fillRect(pellet.x * scale, pellet.y * scale, 1.5, 1.5);
+  miniCtx.fillStyle = "rgba(83, 107, 122, 0.22)";
+  const miniPelletLimit = Math.min(120, snapshot.pellets.x.length);
+  for (let i = 0; i < miniPelletLimit; i += 1) {
+    miniCtx.fillRect(snapshot.pellets.x[i] * scale, snapshot.pellets.y[i] * scale, 1.5, 1.5);
   }
   for (const virus of snapshot.viruses) {
     miniCtx.fillStyle = "#1fb760";
@@ -516,11 +651,11 @@ function drawMinimap(snapshot: BrowserFrame) {
   miniCtx.strokeRect((camera.x - viewW * 0.5) * scale, (camera.y - viewH * 0.5) * scale, viewW * scale, viewH * scale);
 }
 
-function pelletColor(id: string | number) {
-  const palette = ["#ff6b7a", "#41c46a", "#3fa7ff", "#ffcc4d", "#ad7cff", "#ff8a3d"];
-  const key = String(id);
-  const index = [...key].reduce((acc, char) => acc + char.charCodeAt(0), 0) % palette.length;
-  return palette[index];
+const PELLET_PALETTE = ["#ff5252", "#33cc66", "#3399ff", "#ffcc33", "#cc66ff", "#ff9933", "#33cccc"];
+
+function pelletColorIndex(x: number, y: number) {
+  const key = Math.round(x) * 131071 + Math.round(y);
+  return Math.abs(key) % PELLET_PALETTE.length;
 }
 
 function shade(hex: string, delta: number) {
@@ -551,36 +686,40 @@ canvas.addEventListener("pointerup", () => {
   sendInput(false, true);
 });
 window.addEventListener("keydown", (event) => {
-  if (event.code === "KeyW" || event.code === "ArrowUp") keyboard.y = -1;
-  if (event.code === "KeyS" || event.code === "ArrowDown") keyboard.y = 1;
-  if (event.code === "KeyA" || event.code === "ArrowLeft") keyboard.x = -1;
-  if (event.code === "KeyD" || event.code === "ArrowRight") keyboard.x = 1;
+  if (event.code === "ArrowUp") keyboard.y = -1;
+  if (event.code === "ArrowDown") keyboard.y = 1;
+  if (event.code === "ArrowLeft") keyboard.x = -1;
+  if (event.code === "ArrowRight") keyboard.x = 1;
   if (event.code === "Space") {
     event.preventDefault();
     if (!event.repeat) {
-      pendingSplit = true;
       sendInput(true, true);
-      pendingSplit = false;
     }
+  }
+  if (event.code === "KeyW") {
+    sendInput(false, true, true);
   }
   if (event.code === "KeyR") {
     socket?.send(JSON.stringify({ type: "reset" }));
+    resetCameraFocus();
   }
 });
 window.addEventListener("keyup", (event) => {
-  if ((event.code === "KeyW" || event.code === "ArrowUp") && keyboard.y < 0) keyboard.y = 0;
-  if ((event.code === "KeyS" || event.code === "ArrowDown") && keyboard.y > 0) keyboard.y = 0;
-  if ((event.code === "KeyA" || event.code === "ArrowLeft") && keyboard.x < 0) keyboard.x = 0;
-  if ((event.code === "KeyD" || event.code === "ArrowRight") && keyboard.x > 0) keyboard.x = 0;
+  if (event.code === "ArrowUp" && keyboard.y < 0) keyboard.y = 0;
+  if (event.code === "ArrowDown" && keyboard.y > 0) keyboard.y = 0;
+  if (event.code === "ArrowLeft" && keyboard.x < 0) keyboard.x = 0;
+  if (event.code === "ArrowRight" && keyboard.x > 0) keyboard.x = 0;
 });
 elements.resetButton.addEventListener("click", () => {
   socket?.send(JSON.stringify({ type: "reset" }));
+  resetCameraFocus();
 });
 elements.modeSelect.addEventListener("change", () => {
   currentMode = elements.modeSelect.value;
   pointer.active = false;
   keyboard = { x: 0, y: 0 };
   smoothedSteer = { x: 0, y: 0 };
+  resetCameraFocus();
   const nextUrl = new URL(location.href);
   nextUrl.searchParams.set("mode", currentMode);
   history.replaceState(null, "", nextUrl);
@@ -589,4 +728,4 @@ elements.modeSelect.addEventListener("change", () => {
 
 resizeCanvas();
 connect();
-draw();
+requestAnimationFrame(draw);
